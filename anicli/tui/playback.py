@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -51,10 +52,33 @@ def episode_title(anime: BaseAnime, episode: BaseEpisode) -> str:
     return f"{anime.title} - {episode.ordinal} {episode.title}".strip()
 
 
+# video links of the sources, shared by the quality column of the dub list and the playback:
+# the links of video hostings live for hours, a short cache is safe
+VIDEOS_TTL = 600
+_videos_cache: dict[tuple[str, str | None], tuple[float, list[Video]]] = {}
+
+
+async def source_videos(source: BaseSource) -> list[Video]:
+    """`source.a_get_videos()` cached for VIDEOS_TTL (the episode is in the source url)."""
+    key = (source.url, getattr(source, "cdn_videohub_vk_id", None))
+    cached = _videos_cache.get(key)
+    if cached and time.monotonic() - cached[0] < VIDEOS_TTL:
+        return cached[1]
+    videos = list(await source.a_get_videos())
+    if videos:
+        _videos_cache[key] = (time.monotonic(), videos)
+    return videos
+
+
+def max_quality(videos: Sequence[Video]) -> int:
+    """The best video quality (0: audio only or unknown)."""
+    return max((v.quality for v in videos), default=0)
+
+
 async def _pick_video(source: BaseSource, quality: int) -> Video:
     player = urlsplit(source.url).netloc
     try:
-        videos = await source.a_get_videos()
+        videos = await source_videos(source)
     except Exception as e:
         msg = t(
             "Player {player} («{source}») failed to return video: {error}. Try another player",

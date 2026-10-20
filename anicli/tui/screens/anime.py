@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlsplit
 
+from rich.table import Table
 from rich.text import Text
 from textual import on, work
 from textual.app import ComposeResult
@@ -28,6 +30,9 @@ if TYPE_CHECKING:
 
     from ..app import AnicliApp
 
+# the quality column: parallel requests to the players and the wait for one of them
+QUALITY_CONCURRENCY = 4
+QUALITY_TIMEOUT = 25
 # actions available only when the title is linked to MyAnimeList
 MAL_ACTIONS = {"mal_status", "mal_score", "mal_episodes", "mal_remove"}
 
@@ -65,6 +70,8 @@ class AnimeScreen(Screen[None]):
         self.mal: MalAnime | None = None
         self.mal_titles: list[str] = []
         self._poster_url = ""
+        # best video quality by source url: missing - loading, None - the player gave no video
+        self._qualities: dict[str, int | None] = {}
         # the same title on other sites, searched for subtitles (None: not searched yet)
         self.foreign: list[subtitles.ForeignTitle] | None = None
 
@@ -201,12 +208,57 @@ class AnimeScreen(Screen[None]):
         sources_list.set_items(sources, [self._source_label(s) for s in sources])
         if highlighted is not None and highlighted in sources:
             sources_list.highlighted = sources.index(highlighted)
+        self.load_qualities()
 
     @staticmethod
     def _plain_source(choice: Any) -> BaseSource:
         return choice.source if isinstance(choice, subtitles.ForeignSource) else choice
 
-    def _source_label(self, choice: Any) -> Text:
+    def _source_label(self, choice: Any) -> Table:
+        """The source name on the left, its best video quality on the right."""
+        grid = Table.grid(expand=True, padding=(0, 1))
+        grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+        grid.add_column(justify="right", no_wrap=True)
+        grid.add_row(self._source_name(choice), self._quality_label(self._plain_source(choice).url))
+        return grid
+
+    def _quality_label(self, url: str) -> Text:
+        if url not in self._qualities:
+            return Text("…", style="dim")
+        quality = self._qualities[url]
+        if quality is None:
+            return Text("—", style="dim")
+        if not quality:
+            return Text("?", style="dim")
+        wanted = self.app.session.settings.quality
+        # below the quality of the settings: the closest one will be played
+        return Text(f"{quality}p", style="bold" if quality >= wanted else "")
+
+    @work(exclusive=True, group="qualities")
+    async def load_qualities(self) -> None:
+        """Ask the players of the shown sources for their videos, a few at a time; the labels update as they answer."""
+        sources_list: ItemList[Any] = self.query_one("#sources", ItemList)
+        choices = list(sources_list.items)
+        semaphore = asyncio.Semaphore(QUALITY_CONCURRENCY)
+
+        async def one(choice: Any) -> None:
+            source = self._plain_source(choice)
+            if source.url in self._qualities:
+                return
+            async with semaphore:
+                try:
+                    videos = await asyncio.wait_for(playback.source_videos(source), QUALITY_TIMEOUT)
+                except Exception:  # the player is down or blocked: shown as "—"
+                    videos = []
+            self._qualities[source.url] = playback.max_quality(videos) if videos else None
+            # the list could be rebuilt meanwhile (more subtitles from other sites)
+            if choice in sources_list.items:
+                index = sources_list.items.index(choice)
+                sources_list.replace_option_prompt_at_index(index, self._source_label(choice))
+
+        await asyncio.gather(*(one(c) for c in choices))
+
+    def _source_name(self, choice: Any) -> Text:
         source = self._plain_source(choice)
         label = Text()
         if subtitles.is_subtitles(source):
