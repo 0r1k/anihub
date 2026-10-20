@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import random
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
@@ -51,6 +52,8 @@ def search_queries(titles: list[str], limit: int = 4) -> list[str]:
     ordered = sorted(titles, key=lambda title: bool(_CYRILLIC.search(title)))
     return [title for title in ordered if len(title.strip()) >= 3][:limit]
 
+def random_query(titles: list[str]):
+    return random.choice(titles)
 
 def search_text(anime: MalAnime, extra: str = "") -> str:
     """Every title of the entry (romaji, english, japanese, synonyms, the linked site one) for `matches`.

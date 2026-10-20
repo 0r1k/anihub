@@ -11,7 +11,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, OptionList, Select, TabbedContent, TabPane, Tabs
+from textual.widgets import Footer, Header, Input, OptionList, Select, TabbedContent, TabPane, Tabs, Button
 
 from anicli.common import history, mal_links, ongoing_state
 from anicli.common.mal import STATUSES, MalAnime, MalError
@@ -92,6 +92,10 @@ class ListSearch(Input):
         else:
             self.post_message(Navigate(self, "down"))
 
+@localized_bindings
+class RandomSearch(Button):
+    """Randoms in the loaded list"""
+
 
 def _links_by_mal_id() -> dict[int, dict[str, Any]]:
     """The latest link of every MAL entry, read once per list render."""
@@ -168,6 +172,7 @@ class HomeScreen(Screen[None]):
                     yield ListSearch(
                         placeholder=t("Find in the list (f): any title, english or russian"), id="mal-query"
                     )
+                    yield RandomSearch(label=t("Random"), id="mal-random")
                 yield ItemList(id="mal-results", empty_text=t("Log in to MyAnimeList in settings (F2)"))
         yield PlayerBar()
         yield Footer()
@@ -451,10 +456,19 @@ class HomeScreen(Screen[None]):
         else:
             results.border_title = f"{username} · {total}" if total else username
 
+    def _random_mal(self) -> None:
+        results: ItemList[MalAnime] = self.query_one("#mal-results", ItemList)
+        self.open_mal_anime(mal.random_query(results.items))
+
     @on(Input.Changed, "#mal-query")
     def _mal_query_changed(self) -> None:
         if self._mal_loaded:
             self._show_mal()
+
+    @on(Button.Pressed, "#mal-random")
+    def _mal_random_pressed(self) -> None:
+        if self._mal_loaded:
+            self._random_mal()
 
     @work(exclusive=True, group="watching")
     async def load_watching(self, *, force: bool = False) -> None:
