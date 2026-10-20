@@ -208,6 +208,7 @@ RU: dict[str, str] = {
         "Поиск по списку (f): любое название, английское или русское"
     ),
     "Random": "Случайное",
+    "No titles with this status": "Ничего не найдено по этому статусу",
     "Nothing matches «{query}»": "Ничего не найдено по «{query}»",
     "{user} · {shown} of {total}": "{user} · {shown} из {total}",
     "With new episodes: {new} of {total}": "С новыми сериями: {new} из {total}",
@@ -417,6 +418,7 @@ UK: dict[str, str] = {
         "Пошук у списку (f): будь-яка назва, англійська чи українська"
     ),
     "Random": "Випадкове",
+    "No titles with this status": "Нічого не знайдено за цим статусом",
     "Nothing matches «{query}»": "Нічого не знайдено за «{query}»",
     "{user} · {shown} of {total}": "{user} · {shown} з {total}",
     "With new episodes: {new} of {total}": "З новими серіями: {new} з {total}",

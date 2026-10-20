@@ -10,5 +10,6 @@ except PackageNotFoundError:  # running from source without installing
 
 def run_cli():
     """Entry point for CLI application"""
-    from anicli.main import main # noqa
+    from anicli.main import main  # noqa
+
     main()
