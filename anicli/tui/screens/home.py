@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import random
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -458,7 +459,7 @@ class HomeScreen(Screen[None]):
         if not len(items):
             self.notify(t("No titles with this status"), markup=False)
             return
-        self.open_mal_anime(mal.random_query(items))
+        self.open_mal_anime(random.choice(items))
 
     @on(Input.Changed, "#mal-query")
     def _mal_query_changed(self) -> None:
