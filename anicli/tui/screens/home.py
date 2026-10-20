@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import random
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -11,7 +12,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, OptionList, Select, TabbedContent, TabPane, Tabs
+from textual.widgets import Button, Footer, Header, Input, OptionList, Select, TabbedContent, TabPane, Tabs
 
 from anicli.common import history, mal_links, ongoing_state
 from anicli.common.mal import STATUSES, MalAnime, MalError
@@ -168,6 +169,7 @@ class HomeScreen(Screen[None]):
                     yield ListSearch(
                         placeholder=t("Find in the list (f): any title, english or russian"), id="mal-query"
                     )
+                    yield Button(t("Random"), id="mal-random")
                 yield ItemList(id="mal-results", empty_text=t("Log in to MyAnimeList in settings (F2)"))
         yield PlayerBar()
         yield Footer()
@@ -451,10 +453,23 @@ class HomeScreen(Screen[None]):
         else:
             results.border_title = f"{username} · {total}" if total else username
 
+    def _random_mal(self) -> None:
+        results: ItemList[MalAnime] = self.query_one("#mal-results", ItemList)
+        items = results.items
+        if not len(items):
+            self.notify(t("No titles with this status"), markup=False)
+            return
+        self.open_mal_anime(random.choice(items))
+
     @on(Input.Changed, "#mal-query")
     def _mal_query_changed(self) -> None:
         if self._mal_loaded:
             self._show_mal()
+
+    @on(Button.Pressed, "#mal-random")
+    def _mal_random_pressed(self) -> None:
+        if self._mal_loaded:
+            self._random_mal()
 
     @work(exclusive=True, group="watching")
     async def load_watching(self, *, force: bool = False) -> None:

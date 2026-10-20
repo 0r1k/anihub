@@ -8,6 +8,7 @@ from anicli_api.tools.helpers import get_video_by_quality
 if TYPE_CHECKING:
     from anicli_api.base import BaseAnime, BaseEpisode, BaseSource
 
+
 def source_hash(source: "BaseSource") -> int:
     """default hash function helper for build playlist"""
     return hash((source.title, urlsplit(source.url).netloc))

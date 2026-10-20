@@ -118,6 +118,10 @@ AnimeScreen.-narrow #anime-side {
     margin: 1 0 0 1;
 }
 
+#mal-random {
+    margin: 1 0 0 1;
+}
+
 #mal-search {
     height: 80%;
 }

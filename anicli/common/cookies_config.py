@@ -4,9 +4,19 @@ from pathlib import Path
 from typing import Any
 
 BASE_BROWSERS = [
-    "firefox", "librewolf", "brave", "edge", "chrome", "chromium",
-    "arc", "opera", "opera_gx", "vivaldi", "chromium_based",
-    "firefox_based", "any_browser"
+    "firefox",
+    "librewolf",
+    "brave",
+    "edge",
+    "chrome",
+    "chromium",
+    "arc",
+    "opera",
+    "opera_gx",
+    "vivaldi",
+    "chromium_based",
+    "firefox_based",
+    "any_browser",
 ]
 
 if sys.platform == "darwin":
