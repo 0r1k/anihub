@@ -1,0 +1,113 @@
+[project]
+name = "anihub"
+version="7.2"
+description = 'TUI tool for watching anime with russian and ukrainian dubbing or subtitles'
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+keywords = []
+authors = [
+  { name = "vypivshiy"},
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Environment :: Console :: Curses",
+  "Programming Language :: Python :: Implementation :: CPython",
+]
+dependencies = [
+    "anicli-api>=0.12.0",
+    "textual>=6.0.0",
+    "rich>=14.2.0",
+    "typer<0.26",
+    "textual-image[textual]>=0.12.0",
+]
+
+[project.optional-dependencies]
+cookies = [
+    "rookiepy>=0.5.6",
+]
+dev = [
+    "mypy>=1.14.1",
+    "ruff>=0.9.9",
+]
+# everything optional: browser cookies
+all = [
+    "rookiepy>=0.5.6",
+]
+
+
+[project.scripts]
+anihub = "anicli.main:main"
+
+[project.urls]
+Documentation = "https://github.com/0r1k/anihub#readme"
+Issues = "https://github.com/0r1k/anihub/issues"
+Source = "https://github.com/0r1k/anihub"
+Releases = "https://github.com/0r1k/anihub/releases"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["anicli/"]
+
+[tool.hatch.build.targets.sdist]
+include = ["anicli/", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+lint.select = [
+  "A",
+  "ARG",
+  "B",
+  "C",
+  "DTZ",
+  "E",
+  "EM",
+  "F",
+  "FBT",
+  "I",
+  "ICN",
+  "ISC",
+  "N",
+  "PLC",
+  "PLE",
+  "PLR",
+  "PLW",
+  "Q",
+  "RUF",
+  "S",
+  "T",
+  "TID",
+  "UP",
+  "W",
+  "YTT",
+]
+
+lint.ignore = [
+  "RUF001",  # allow single cyrillic letters (H, c) etc
+  "RUF002",
+  "RUF003",  # cyrillic in comments (site markup examples)
+  # print function allowed in CLI client
+  "T201",
+  # Allow non-abstract empty methods in abstract base classes
+  "B027",
+  # Allow boolean positional values in function calls, like `dict.get(... True)`
+  "FBT003",
+  # Ignore checks for possible passwords
+  "S105", "S106", "S107",
+  # Ignore complexity
+  "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915",
+]
+lint.unfixable = [
+  # Don't touch unused imports
+  "F401",
+]

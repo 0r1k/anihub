@@ -1,0 +1,40 @@
+name: release
+
+# Push a tag `vX.Y` (equal to the version in pyproject.toml) to publish a GitHub release.
+# `anihub update` installs the latest release, `releases/latest/download/anihub.tar.gz` is the install link.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: The tag matches the project version
+        run: |
+          version=$(uv run --no-project python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version in pyproject.toml"
+            exit 1
+          fi
+
+      - name: Build
+        run: uv build
+
+      - name: Smoke test
+        run: uv run --no-project --isolated --with dist/anihub-*.whl python tests/smoke_test.py
+
+      - name: Stable install link
+        run: cp dist/anihub-*.tar.gz dist/anihub.tar.gz
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "anihub ${GITHUB_REF_NAME#v}" --generate-notes

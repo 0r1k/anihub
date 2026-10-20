@@ -1,0 +1,211 @@
+Screen {
+    background: $background;
+}
+
+.hidden {
+    display: none;
+}
+
+/* --- lists ----------------------------------------------------------------- */
+
+ItemList, EpisodeList {
+    height: 1fr;
+    border: round $panel-lighten-2;
+    border-title-color: $text-muted;
+    border-subtitle-color: $text-muted;
+    padding: 0 1;
+    background: $background;
+}
+
+EpisodeList > .episode-list--button-watched {
+    color: $text-accent;
+}
+
+ItemList:focus, EpisodeList:focus {
+    border: round $accent;
+    border-title-color: $accent;
+}
+
+#query, #episode-range {
+    margin: 1 0 0 0;
+}
+
+TabPane {
+    padding: 0 1;
+}
+
+/* --- anime screen ---------------------------------------------------------- */
+
+#anime-page {
+    height: 1fr;
+}
+
+#anime-side {
+    width: 32;
+    height: 1fr;
+    padding: 1 0 0 2;
+}
+
+AnimeScreen.-narrow #anime-side {
+    display: none;
+}
+
+#poster {
+    width: 30;
+    height: auto;
+}
+
+#anime-main {
+    width: 1fr;
+}
+
+#anime-info {
+    height: auto;
+    max-height: 8;
+    padding: 1 2 0 2;
+}
+
+#anime-body {
+    height: 1fr;
+    padding: 0 1;
+}
+
+#episodes {
+    width: 1fr;
+}
+
+#sources {
+    width: 1fr;
+}
+
+/* --- MyAnimeList ----------------------------------------------------------- */
+
+#mal-bar {
+    height: auto;
+    padding: 0 1;
+    margin-top: 1;
+}
+
+#mal-label {
+    width: 1fr;
+    height: 3;
+    content-align: left middle;
+    padding: 0 1;
+    text-overflow: ellipsis;
+    text-wrap: nowrap;
+}
+
+#mal-status {
+    width: 22;
+}
+
+#mal-bar Button {
+    min-width: 0;
+    margin-left: 1;
+}
+
+#mal-filter, #ongoing-filter {
+    width: 30;
+    margin: 1 0 0 0;
+}
+
+#mal-search {
+    height: 80%;
+}
+
+#mal-candidates {
+    margin-top: 1;
+}
+
+#scores {
+    height: auto;
+    max-height: 14;
+}
+
+#mal-account {
+    height: auto;
+    margin-top: 1;
+}
+
+#mal-account-label {
+    width: 1fr;
+    height: 3;
+    content-align: left middle;
+}
+
+/* --- player bar ------------------------------------------------------------ */
+
+PlayerBar {
+    display: none;
+    dock: bottom;
+    height: 1;
+    margin-bottom: 1;
+    padding: 0 2;
+    background: $primary-muted;
+}
+
+#player-label {
+    width: 1fr;
+    text-overflow: ellipsis;
+    text-wrap: nowrap;
+}
+
+#player-progress {
+    width: auto;
+    display: none;
+}
+
+/* --- dialogs --------------------------------------------------------------- */
+
+ModalScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+.dialog {
+    width: 72;
+    max-width: 100%;
+    height: auto;
+    max-height: 100%;
+    padding: 1 2;
+    border: round $accent;
+    background: $surface;
+}
+
+.dialog-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.dialog Label {
+    color: $text-muted;
+}
+
+.dialog Select, .dialog Input {
+    width: 100%;
+}
+
+.dialog-message {
+    margin-bottom: 1;
+}
+
+.dialog-hint {
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+.dialog .dialog-section {
+    color: $text;
+    text-style: bold;
+    margin-top: 1;
+}
+
+.dialog-buttons {
+    height: auto;
+    margin-top: 1;
+    align-horizontal: right;
+}
+
+.dialog-buttons Button {
+    margin-left: 1;
+}
