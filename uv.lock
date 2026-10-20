@@ -26,7 +26,7 @@ wheels = [
 
 [[package]]
 name = "anihub"
-version = "7.2"
+version = "7.3"
 source = { editable = "." }
 dependencies = [
     { name = "anicli-api" },

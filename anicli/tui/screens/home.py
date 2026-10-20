@@ -9,6 +9,7 @@ from rich.text import Text
 from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Input, OptionList, Select, TabbedContent, TabPane, Tabs
 
@@ -79,9 +80,30 @@ class FilterSelect(Select[str]):
         self.post_message(Navigate(self, direction))
 
 
-def _mal_label(anime: MalAnime, with_status: bool) -> Text:
+@localized_bindings
+class ListSearch(Input):
+    """Search in the loaded list: Esc clears the query, the second Esc goes back to the list."""
+
+    BINDINGS = [Binding("escape", "clear_or_leave", "Clear", show=False)]
+
+    def action_clear_or_leave(self) -> None:
+        if self.value:
+            self.value = ""
+        else:
+            self.post_message(Navigate(self, "down"))
+
+
+def _links_by_mal_id() -> dict[int, dict[str, Any]]:
+    """The latest link of every MAL entry, read once per list render."""
+    links: dict[int, dict[str, Any]] = {}
+    for link in mal_links.read():
+        links.setdefault(link.get("mal_id"), link)
+    return links
+
+
+def _mal_label(anime: MalAnime, with_status: bool, link: dict[str, Any] | None) -> Text:
     label = mal.describe(anime, with_status=with_status)
-    if link := mal_links.find_by_mal_id(anime.id):
+    if link:
         label.append(f"\n↩ {link['extractor_name']}: {link['data']['title']}", style="dim")
     return label
 
@@ -96,6 +118,7 @@ class HomeScreen(Screen[None]):
         Binding("h", "show_tab('history')", "History"),
         Binding("m", "show_tab('mal')", "MyAnimeList"),
         Binding("r,f5", "refresh", "Refresh"),
+        Binding("f", "find", "Find"),
         Binding("up", "arrow('up')", show=False),
         Binding("down", "arrow('down')", show=False),
     ]
@@ -110,6 +133,8 @@ class HomeScreen(Screen[None]):
         # when a new episode of the title was noticed, by item url
         self._ongoing_updated: dict[str, float] = {}
         self._mal_loaded = False
+        # the loaded MAL list (the status filter is applied by the API, the search on display)
+        self._mal_items: list[MalAnime] = []
         self._watching_loaded = False
         # MAL entry being searched on the site from the MAL tab: linked when a result is opened
         self._mal_hint: MalAnime | None = None
@@ -133,12 +158,16 @@ class HomeScreen(Screen[None]):
             with TabPane(t("History"), id="history"):
                 yield HistoryList(id="history-results", empty_text=t("History is empty"))
             with TabPane("MyAnimeList", id="mal"):
-                yield FilterSelect(
-                    [(t("All"), MAL_ALL), *((mal.status_label(s), s) for s in STATUSES)],
-                    value="watching",
-                    allow_blank=False,
-                    id="mal-filter",
-                )
+                with Horizontal(id="mal-controls"):
+                    yield FilterSelect(
+                        [(t("All"), MAL_ALL), *((mal.status_label(s), s) for s in STATUSES)],
+                        value="watching",
+                        allow_blank=False,
+                        id="mal-filter",
+                    )
+                    yield ListSearch(
+                        placeholder=t("Find in the list (f): any title, english or russian"), id="mal-query"
+                    )
                 yield ItemList(id="mal-results", empty_text=t("Log in to MyAnimeList in settings (F2)"))
         yield PlayerBar()
         yield Footer()
@@ -201,6 +230,8 @@ class HomeScreen(Screen[None]):
             self._on_tab_shown(event.pane.id, focus=not isinstance(self.focused, Tabs))
 
     def _on_tab_shown(self, tab: str, *, focus: bool = True) -> None:
+        # "f" (find) is shown on the MyAnimeList tab only
+        self.refresh_bindings()
         if tab == "ongoing" and not self._ongoing_loaded:
             self.load_ongoing()
         elif tab == "history":
@@ -229,8 +260,9 @@ class HomeScreen(Screen[None]):
 
     @on(Navigate)
     def _navigate(self, event: Navigate) -> None:
-        filters = {"mal-filter": "#mal-results", "ongoing-filter": "#ongoing-results"}
-        lists = {results.lstrip("#"): f"#{name}" for name, results in filters.items()}
+        filters = {"mal-filter": "#mal-results", "mal-query": "#mal-results", "ongoing-filter": "#ongoing-results"}
+        # up from the top of a list: to the search field / filter above it
+        lists = {"mal-results": "#mal-query", "ongoing-results": "#ongoing-filter"}
         if event.control.id in filters and event.direction in ("up", "down"):
             if event.direction == "up":
                 self.query_one(Tabs).focus()
@@ -259,6 +291,17 @@ class HomeScreen(Screen[None]):
                 self.query_one(Tabs).focus()
             elif self.query_one("#search-results", ItemList).items:
                 self.query_one("#search-results").focus()
+        elif focused is not None and focused.id == "mal-query":
+            self._navigate(Navigate(focused, direction))
+
+    def action_find(self) -> None:
+        self.query_one("#mal-query", Input).focus()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        # the list search is only on the MyAnimeList tab
+        if action == "find":
+            return self.query_one(TabbedContent).active == "mal"
+        return True
 
     def action_refresh(self) -> None:
         active = self.query_one(TabbedContent).active
@@ -376,13 +419,42 @@ class HomeScreen(Screen[None]):
         finally:
             stop_loading(results)
         self._mal_loaded = True
-        highlighted = results.highlighted
-        results.empty_text = t("No titles with this status")
-        results.set_items(items, [_mal_label(i, with_status=status == MAL_ALL) for i in items])
-        results.border_title = f"{client.username} · {len(items)}" if items else client.username
-        if items and highlighted is not None:
-            results.highlighted = min(highlighted, len(items) - 1)
+        self._mal_items = items
+        self._show_mal()
         self.focus_loaded("mal")
+
+    def _show_mal(self) -> None:
+        results: ItemList[MalAnime] = self.query_one("#mal-results", ItemList)
+        query = self.query_one("#mal-query", Input).value.strip()
+        with_status = str(self.query_one("#mal-filter", Select).value) == MAL_ALL
+        items = self._mal_items
+        links = _links_by_mal_id()
+        if query:
+            items = [
+                a
+                for a in items
+                if mal.matches(mal.search_text(a, links[a.id]["data"]["title"] if a.id in links else ""), query)
+            ]
+        current = results.current
+        results.empty_text = (
+            t("Nothing matches «{query}»", query=query)
+            if query and self._mal_items
+            else t("No titles with this status")
+        )
+        results.set_items(items, [_mal_label(i, with_status, links.get(i.id)) for i in items])
+        if current in items:
+            results.highlighted = items.index(current)
+        username = self.app.session.mal.username
+        total = len(self._mal_items)
+        if query:
+            results.border_title = t("{user} · {shown} of {total}", user=username, shown=len(items), total=total)
+        else:
+            results.border_title = f"{username} · {total}" if total else username
+
+    @on(Input.Changed, "#mal-query")
+    def _mal_query_changed(self) -> None:
+        if self._mal_loaded:
+            self._show_mal()
 
     @work(exclusive=True, group="watching")
     async def load_watching(self, *, force: bool = False) -> None:

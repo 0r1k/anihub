@@ -109,6 +109,15 @@ AnimeScreen.-narrow #anime-side {
     margin: 1 0 0 0;
 }
 
+#mal-controls {
+    height: auto;
+}
+
+#mal-query {
+    width: 1fr;
+    margin: 1 0 0 1;
+}
+
 #mal-search {
     height: 80%;
 }

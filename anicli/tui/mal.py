@@ -52,6 +52,19 @@ def search_queries(titles: list[str], limit: int = 4) -> list[str]:
     return [title for title in ordered if len(title.strip()) >= 3][:limit]
 
 
+def search_text(anime: MalAnime, extra: str = "") -> str:
+    """Every title of the entry (romaji, english, japanese, synonyms, the linked site one) for `matches`.
+
+    Titles are separated by new lines: a query cannot match across two of them.
+    """
+    return "\n".join(mal_links.normalize(title) for title in (*anime.all_titles, extra) if title)
+
+
+def matches(text: str, query: str) -> bool:
+    """`query` in `search_text`, ignoring case, spaces and punctuation: "dr stone" finds "Dr. Stone: Terraforming"."""
+    return mal_links.normalize(query) in text
+
+
 async def resolve(
     session: Session, item: Any, extractor_name: str, anime: Any = None, hint: MalAnime | None = None
 ) -> tuple[MalAnime | None, list[str]]:

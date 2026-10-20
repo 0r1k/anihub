@@ -202,6 +202,13 @@ RU: dict[str, str] = {
     "Announced": "Анонсы",
     "ANNOUNCED": "АНОНС",
     "from {date}": "с {date}",
+    "Find": "Найти",
+    "Clear": "Очистить",
+    "Find in the list (f): any title, english or russian": (
+        "Поиск по списку (f): любое название, английское или русское"
+    ),
+    "Nothing matches «{query}»": "Ничего не найдено по «{query}»",
+    "{user} · {shown} of {total}": "{user} · {shown} из {total}",
     "With new episodes: {new} of {total}": "С новыми сериями: {new} из {total}",
     "Nothing in Watching on MyAnimeList": "В списке «Смотрю» на MyAnimeList пусто",
     "new: {count}": "новых: {count}",
@@ -403,6 +410,13 @@ UK: dict[str, str] = {
     "Announced": "Анонси",
     "ANNOUNCED": "АНОНС",
     "from {date}": "з {date}",
+    "Find": "Знайти",
+    "Clear": "Очистити",
+    "Find in the list (f): any title, english or russian": (
+        "Пошук у списку (f): будь-яка назва, англійська чи українська"
+    ),
+    "Nothing matches «{query}»": "Нічого не знайдено за «{query}»",
+    "{user} · {shown} of {total}": "{user} · {shown} з {total}",
     "With new episodes: {new} of {total}": "З новими серіями: {new} з {total}",
     "Nothing in Watching on MyAnimeList": "У списку «Дивлюся» на MyAnimeList порожньо",
     "new: {count}": "нових: {count}",
