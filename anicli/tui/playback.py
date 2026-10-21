@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -56,6 +57,10 @@ def episode_title(anime: BaseAnime, episode: BaseEpisode) -> str:
 # the links of video hostings live for hours, a short cache is safe
 VIDEOS_TTL = 600
 _videos_cache: dict[tuple[str, str | None], tuple[float, list[Video]]] = {}
+# requests in progress: Enter on a dub while its quality is loading waits for the same request
+_videos_requests: dict[tuple[str, str | None], asyncio.Task[list[Video]]] = {}
+# episodes of a batch whose videos are requested in parallel, ahead of the played one
+BATCH_LOOKAHEAD = 4
 
 
 async def source_videos(source: BaseSource) -> list[Video]:
@@ -64,6 +69,16 @@ async def source_videos(source: BaseSource) -> list[Video]:
     cached = _videos_cache.get(key)
     if cached and time.monotonic() - cached[0] < VIDEOS_TTL:
         return cached[1]
+    request = _videos_requests.get(key)
+    if request is None:
+        request = asyncio.ensure_future(_fetch_videos(source, key))
+        _videos_requests[key] = request
+        request.add_done_callback(lambda _task: _videos_requests.pop(key, None))
+    # a cancelled waiter (quality column timeout, closed page) leaves the request to the others
+    return await asyncio.shield(request)
+
+
+async def _fetch_videos(source: BaseSource, key: tuple[str, str | None]) -> list[Video]:
     videos = list(await source.a_get_videos())
     if videos:
         _videos_cache[key] = (time.monotonic(), videos)
@@ -103,6 +118,8 @@ async def _run_player(
     on_watched: Callable[[str], None] | None = None,
 ) -> PlayerResult:
     s = session.settings
+    if s.stream_proxy:
+        videos = await session.stream_proxy.wrap(videos)
     player = create_player(
         s.player,
         videos,
@@ -138,12 +155,14 @@ async def play_episode(
     episode: BaseEpisode,
     source: BaseSource,
     *,
+    on_play: Callable[[Sequence[str]], None] = lambda _titles: None,
     on_watched: OnWatched | None = None,
     confirm_watched: ConfirmWatched | None = None,
 ) -> None:
     video = await _pick_video(source, session.settings.quality)
     title = episode_title(anime, episode)
     history.save(item, extractor_name, {title: source}, title, ordinal=episode.ordinal)
+    on_play([title])
     result = await _run_player(
         session, [video], [title], on_watched=(lambda _title: on_watched(episode.ordinal)) if on_watched else None
     )
@@ -213,6 +232,8 @@ async def play_batch(
         initial_source=source,
         initial_video=initial_video,
         cb_title=make_title,
+        get_videos=source_videos,
+        lookahead=BATCH_LOOKAHEAD,
     ):
         if ask_before is not None:
             if not await confirm_next(title):

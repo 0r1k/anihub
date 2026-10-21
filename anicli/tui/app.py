@@ -83,11 +83,11 @@ class AnicliApp(App[None]):
 
     # --- playback ------------------------------------------------------------
 
-    def play(self, coro: Awaitable[None], label: str) -> None:
-        """Run playback in background; a new playback stops the previous one."""
+    def play(self, coro: Awaitable[None], status: str) -> None:
+        """Run playback in background; a new playback stops the previous one. `status` is shown until it starts."""
         play_id = next(self._play_ids)
         self._current_play = play_id
-        self.player_status = f"▶ {label}"
+        self.player_status = status
         self.run_worker(self._play(coro, play_id), group="player", exclusive=True, exit_on_error=False)
 
     async def _play(self, coro: Awaitable[None], play_id: int) -> None:

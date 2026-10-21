@@ -111,6 +111,7 @@ class SettingsScreen(ModalScreen[set[str]]):
             )
             yield Label(t("Extra player arguments"))
             yield Input(s.player_args, placeholder="--fullscreen", id="player-args")
+            yield Checkbox(t("Load video through anihub (fast start, reconnects)"), s.stream_proxy, id="stream-proxy")
             yield Label(t("Episodes per player playlist"))
             yield Input(str(s.m3u_size), type="integer", validators=[Number(minimum=1, maximum=100)], id="m3u-size")
             yield Label(t("Proxy"))
@@ -228,6 +229,7 @@ class SettingsScreen(ModalScreen[set[str]]):
         s.player_command = player_command
         s.player_args = self.query_one("#player-args", Input).value.strip()
         s.m3u_size = int(self.query_one("#m3u-size", Input).value)
+        s.stream_proxy = self.query_one("#stream-proxy", Checkbox).value
 
         proxy = self.query_one("#proxy", Input).value.strip() or None
         timeout = float(self.query_one("#timeout", Input).value)

@@ -67,6 +67,7 @@ RU: dict[str, str] = {
     "episode {num}": "серия {num}",
     "{count} episodes from {num}": "{count} серий, начиная с {num}",
     "{title}: loading {count} episodes…": "{title}: загрузка {count} серий…",
+    "{title}: getting the video from {player}…": "{title}: получаю видео от {player}…",
     "Played {played} of {total}: «{source}» has no next episodes": (
         "Воспроизведено {played} из {total}: у «{source}» нет следующих серий"
     ),
@@ -91,6 +92,9 @@ RU: dict[str, str] = {
     "Other (command)": "Другой (команда)",
     "Player command": "Команда плеера",
     "Extra player arguments": "Дополнительные аргументы плеера",
+    "Load video through anihub (fast start, reconnects)": (
+        "Загружать видео через anihub (быстрый старт, переподключение)"
+    ),
     "Episodes per player playlist": "Серий в одном плейлисте плеера",
     "Proxy": "Прокси",
     "format: scheme://user:password@host:port": "формат: scheme://user:password@host:port",
@@ -193,6 +197,16 @@ RU: dict[str, str] = {
     "no subtitles: t — search other sites": "нет субтитров: t — искать на других сайтах",
     "Searching «{title}» on other sites…": "Ищу «{title}» на других сайтах…",
     "Found on: {sites}": "Найдено: {sites}",
+    "Other sites": "Другие сайты",
+    "«{title}» on other sites": "«{title}» на других сайтах",
+    "Enter — open the title on this site": "Enter — открыть тайтл на этом сайте",
+    "episodes: {count}": "серий: {count}",
+    "episode {num}: {players}": "серия {num}: {players}",
+    "Searching: {answered} of {total} sites answered": "Поиск: ответили {answered} из {total} сайтов",
+    "Found on {found} of {total} sites": "Найдено на {found} из {total} сайтов",
+    "searching…": "ищу…",
+    "not found": "не найдено",
+    "similar name, check the season": "похожее название, проверьте сезон",
     "The title is not found on other sites": "Тайтл не найден на других сайтах",
     "Choose an episode: subtitles from these sites are added to the list": (
         "Выберите серию: субтитры с этих сайтов добавятся в список"
@@ -278,6 +292,7 @@ UK: dict[str, str] = {
     "episode {num}": "серія {num}",
     "{count} episodes from {num}": "{count} серій, починаючи з {num}",
     "{title}: loading {count} episodes…": "{title}: завантаження {count} серій…",
+    "{title}: getting the video from {player}…": "{title}: отримую відео від {player}…",
     "Played {played} of {total}: «{source}» has no next episodes": (
         "Відтворено {played} з {total}: у «{source}» немає наступних серій"
     ),
@@ -302,6 +317,9 @@ UK: dict[str, str] = {
     "Other (command)": "Інший (команда)",
     "Player command": "Команда плеєра",
     "Extra player arguments": "Додаткові аргументи плеєра",
+    "Load video through anihub (fast start, reconnects)": (
+        "Завантажувати відео через anihub (швидкий старт, перепідключення)"
+    ),
     "Episodes per player playlist": "Серій в одному плейлисті плеєра",
     "Proxy": "Проксі",
     "format: scheme://user:password@host:port": "формат: scheme://user:password@host:port",
@@ -402,6 +420,16 @@ UK: dict[str, str] = {
     "no subtitles: t — search other sites": "немає субтитрів: t — шукати на інших сайтах",
     "Searching «{title}» on other sites…": "Шукаю «{title}» на інших сайтах…",
     "Found on: {sites}": "Знайдено: {sites}",
+    "Other sites": "Інші сайти",
+    "«{title}» on other sites": "«{title}» на інших сайтах",
+    "Enter — open the title on this site": "Enter — відкрити тайтл на цьому сайті",
+    "episodes: {count}": "серій: {count}",
+    "episode {num}: {players}": "серія {num}: {players}",
+    "Searching: {answered} of {total} sites answered": "Пошук: відповіли {answered} з {total} сайтів",
+    "Found on {found} of {total} sites": "Знайдено на {found} з {total} сайтів",
+    "searching…": "шукаю…",
+    "not found": "не знайдено",
+    "similar name, check the season": "схожа назва, перевірте сезон",
     "The title is not found on other sites": "Тайтл не знайдено на інших сайтах",
     "Choose an episode: subtitles from these sites are added to the list": (
         "Оберіть серію: субтитри з цих сайтів додадуться до списку"

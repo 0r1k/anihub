@@ -15,6 +15,7 @@ from anicli.common.config import get_config_dir
 from anicli.common.extractors import dynamic_load_extractor_module, get_extractor_modules
 from anicli.common.mal import MalClient
 from anicli.common.players import PLAYERS, player_command
+from anicli.common.stream_proxy import StreamProxy
 
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES
 
@@ -41,6 +42,7 @@ PERSISTENT_FIELDS = (
     "poster_render",
     "subtitles_first",
     "ongoing_filter",
+    "stream_proxy",
 )
 
 
@@ -73,6 +75,8 @@ class Settings:
     subtitles_first: bool = True
     # ongoing tab filter: all, airing, announced
     ongoing_filter: str = "airing"
+    # players load videos through anihub: see anicli.common.stream_proxy
+    stream_proxy: bool = True
     headers: dict[str, str] = field(default_factory=dict)
     cookies: CookieJar | None = None
 
@@ -121,6 +125,7 @@ class Session:
         self.http, self.http_async = self._make_clients()
         self.extractor = self._make_extractor(settings.extractor_name)
         self.mal = self._make_mal()
+        self.stream_proxy = StreamProxy()
 
     @property
     def http_kwargs(self) -> T_KW_HTTPS:
@@ -163,3 +168,4 @@ class Session:
         self.http.close()
         await self.http_async.aclose()
         await self.mal.aclose()
+        await self.stream_proxy.aclose()

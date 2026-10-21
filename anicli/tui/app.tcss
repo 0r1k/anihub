@@ -135,6 +135,16 @@ AnimeScreen.-narrow #anime-side {
     max-height: 14;
 }
 
+#sites-dialog {
+    width: 100;
+}
+
+#sites {
+    height: auto;
+    max-height: 24;
+    margin-bottom: 1;
+}
+
 #mal-account {
     height: auto;
     margin-top: 1;

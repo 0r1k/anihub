@@ -598,7 +598,7 @@ class HomeScreen(Screen[None]):
                         on_watched=self.app.mal_tracker(entry["extractor_name"], url),
                         confirm_watched=self.app.mal_confirm_watched(entry["extractor_name"], url),
                     ),
-                    entry["episode"],
+                    f"▶ {entry['episode']}",
                 )
             else:
                 self.open_title(item, entry["extractor_name"])

@@ -15,6 +15,7 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, OptionList, Select, Static
 from textual.widgets.selection_list import Selection
 
+from anicli.common import mal_links
 from anicli.common.extractors import dynamic_load_extractor_module
 from anicli.common.mal import STATUSES, MalAnime, MalError
 
@@ -24,6 +25,7 @@ from ..selection import parse_selection_mask
 from ..widgets import EpisodeList, ItemList, Navigate, PlayerBar, stop_loading
 from .dialogs import ConfirmScreen
 from .mal_dialogs import EpisodesScreen, MalSearchScreen, ScoreScreen
+from .sites import SitesScreen
 
 if TYPE_CHECKING:
     from anicli_api.base import BaseAnime, BaseEpisode, BaseSource
@@ -49,6 +51,7 @@ class AnimeScreen(Screen[None]):
         Binding("r", "range", "Range"),
         Binding("f5,u", "refresh", "Refresh"),
         Binding("t", "find_subtitles", "Subtitles from other sites"),
+        Binding("o", "other_sites", "Other sites"),
         Binding("g", "mal_score", "Rate"),
         Binding("s", "mal_status", "MAL status", show=False),
         Binding("e", "mal_episodes", "Watched episodes", show=False),
@@ -72,8 +75,13 @@ class AnimeScreen(Screen[None]):
         self._poster_url = ""
         # best video quality by source url: missing - loading, None - the player gave no video
         self._qualities: dict[str, int | None] = {}
-        # the same title on other sites, searched for subtitles (None: not searched yet)
+        # the same title on other sites, their subtitles are added to the dub list (None: `t` not pressed yet)
         self.foreign: list[subtitles.ForeignTitle] | None = None
+        # the search of the same title on other sites, once for `t` and `o` (None: not started yet)
+        self._sites_task: asyncio.Task[list[subtitles.ForeignTitle]] | None = None
+        self._site_searches: list[subtitles.SiteSearch] = []
+        # the open dialog of `o`, updated as the sites answer
+        self._sites_screen: SitesScreen | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -110,7 +118,8 @@ class AnimeScreen(Screen[None]):
             yield ItemList(id="sources", empty_text=t("Select an episode on the left"))
 
     def on_mount(self) -> None:
-        self.sub_title = self.item.title
+        # the site matters: titles from history and MyAnimeList open where they were watched
+        self.sub_title = f"{self.item.title} · {self.extractor_name}"
         episodes = self.query_one(EpisodeList)
         episodes.border_title = t("Episodes")
         episodes.border_subtitle = t("Space to mark, Enter to choose")
@@ -305,8 +314,16 @@ class AnimeScreen(Screen[None]):
         on_watched = app.mal_tracker(self.extractor_name, self.item.url)
         confirm_watched = app.mal_confirm_watched(self.extractor_name, self.item.url)
 
+        def on_play(titles: Sequence[str]) -> None:
+            app.player_status = f"▶ {titles[0]} … {titles[-1]}" if len(titles) > 1 else f"▶ {titles[0]}"
+
         if len(episodes) == 1:
-            label = playback.episode_title(anime, episodes[0])
+            # the site can answer for a while: the player is not started yet
+            label = t(
+                "{title}: getting the video from {player}…",
+                title=playback.episode_title(anime, episodes[0]),
+                player=urlsplit(source.url).netloc,
+            )
             app.play(
                 playback.play_episode(
                     session,
@@ -315,6 +332,7 @@ class AnimeScreen(Screen[None]):
                     anime,
                     episodes[0],
                     source,
+                    on_play=on_play,
                     on_watched=on_watched,
                     confirm_watched=confirm_watched,
                 ),
@@ -327,9 +345,6 @@ class AnimeScreen(Screen[None]):
 
         def on_fetched(count: int, _title: str) -> None:
             app.player_progress = (count, total)
-
-        def on_play(titles: Sequence[str]) -> None:
-            app.player_status = f"▶ {titles[0]} … {titles[-1]}" if len(titles) > 1 else f"▶ {titles[0]}"
 
         async def confirm_next(title: str) -> bool:
             question = t("Play the next episodes starting from «{title}»?", title=title)
@@ -651,7 +666,43 @@ class AnimeScreen(Screen[None]):
     def matches(self, extractor_name: str, url: str) -> bool:
         return self.extractor_name == extractor_name and self.item.url == url
 
-    # --- subtitles from other sites ----------------------------------------
+    # --- the title on other sites ---------------------------------------------
+
+    def on_unmount(self) -> None:
+        if self._sites_task is not None:
+            self._sites_task.cancel()
+
+    def _search_sites(self) -> asyncio.Task[list[subtitles.ForeignTitle]]:
+        """Search the title on the other sites (exact and similar names) once per page."""
+        if self._sites_task is None:
+            assert self.anime is not None  # noqa: S101
+            # original and english titles from the site: MyAnimeList can be not logged in or fail
+            hint_id, hint_titles = mal_links.hints(self.item, self.anime)
+            titles = {self.item.title, self.anime.title, *self.mal_titles, *hint_titles}
+            if self.mal is not None:
+                titles.update(self.mal.all_titles)
+            # russian names differ from site to site, the original one finds the title on more of them
+            originals = self.mal.all_titles if self.mal else sorted(titles)
+            queries = list(dict.fromkeys([self.item.title, *mal.search_queries(originals, limit=2)]))
+            self._site_searches = [subtitles.SiteSearch(name) for name in subtitles.other_sites(self.extractor_name)]
+            self._sites_task = asyncio.ensure_future(
+                subtitles.find_titles(
+                    self.app.session,
+                    self.extractor_name,
+                    queries,
+                    titles,
+                    mal_id=self.mal.id if self.mal else hint_id,
+                    similar=True,
+                    on_site=self._site_answered,
+                )
+            )
+        return self._sites_task
+
+    def _site_answered(self, answer: subtitles.SiteSearch) -> None:
+        search = next(s for s in self._site_searches if s.name == answer.name)
+        search.state, search.site, search.error = answer.state, answer.site, answer.error
+        if self._sites_screen is not None:
+            self._sites_screen.update(search)
 
     def action_find_subtitles(self) -> None:
         if self.anime is not None:
@@ -659,14 +710,10 @@ class AnimeScreen(Screen[None]):
 
     @work(exclusive=True, group="subtitles")
     async def find_subtitles(self) -> None:
-        assert self.anime is not None  # noqa: S101
-        titles = {self.item.title, self.anime.title, *self.mal_titles}
-        if self.mal is not None:
-            titles.update(self.mal.all_titles)
-        self.notify(t("Searching «{title}» on other sites…", title=self.item.title), markup=False)
-        queries = [self.item.title, *mal.search_queries([self.mal.title] if self.mal else self.mal_titles, limit=1)]
-        queries = list(dict.fromkeys(queries))
-        sites = await subtitles.find_titles(self.app.session, self.extractor_name, queries, titles)
+        if self._sites_task is None:
+            self.notify(t("Searching «{title}» on other sites…", title=self.item.title), markup=False)
+        # subtitles are added by themselves: only exact names, a wrong season is worse than nothing
+        sites = [site for site in await asyncio.shield(self._search_sites()) if site.exact]
         self.foreign = sites
         if sites:
             names = ", ".join(f"{s.extractor_name} «{s.item.title}»" for s in sites)
@@ -677,3 +724,19 @@ class AnimeScreen(Screen[None]):
             self.load_sources(self.chosen)
         elif sites:
             self.notify(t("Choose an episode: subtitles from these sites are added to the list"), markup=False)
+
+    def action_other_sites(self) -> None:
+        """Choose another site of the title (other players and dubs): the dialog fills in as the sites answer."""
+        if self.anime is None:
+            return
+        self._search_sites()
+        # players of the chosen episode, or of the first one
+        ordinal = int(self.episodes[self.chosen[0] if self.chosen else 0].ordinal) if self.episodes else 1
+        title = t("«{title}» on other sites", title=self.item.title)
+        self._sites_screen = SitesScreen(title, self._site_searches, ordinal)
+        self.app.push_screen(self._sites_screen, self._site_chosen)
+
+    def _site_chosen(self, site: subtitles.ForeignTitle | None) -> None:
+        self._sites_screen = None
+        if site is not None:
+            self.app.switch_screen(AnimeScreen(site.item, site.extractor_name, mal_hint=self.mal))
