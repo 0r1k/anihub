@@ -11,6 +11,7 @@ from textual.binding import Binding
 from textual.reactive import reactive
 from textual.theme import Theme
 
+import anicli
 from anicli.common import mal_links
 from anicli.common.mal import MalAnime, MalAuthError, MalError
 from anicli.common.players import is_installed
@@ -25,13 +26,18 @@ from .screens.mal_dialogs import ScoreScreen
 from .screens.settings import SettingsScreen
 from .session import Session
 
+# `AnicliApp.run()` result: the user chose to update anihub, the terminal runs the update after the app exits
+EXIT_UPDATE = "update"
+
 
 @localized_bindings
-class AnicliApp(App[None]):
+class AnicliApp(App[str | None]):
     CSS_PATH = "app.tcss"
     TITLE = "anihub"
     BINDINGS = [
         Binding("f2", "settings", "Settings"),
+        # shown only when a new release is found at start
+        Binding("f9", "update", "Update anihub"),
         Binding("x", "stop_playback", "Stop"),
         Binding("ctrl+q", "quit", "Quit", priority=True),
     ]
@@ -51,6 +57,8 @@ class AnicliApp(App[None]):
         self._current_play = -1
         # list updates read-modify-write the entry: run them one by one
         self._mal_lock = asyncio.Lock()
+        # the newer anihub release found at start (None: up to date or the check failed)
+        self._new_version: str | None = None
 
     def on_mount(self) -> None:
         self.sub_title = self.session.settings.extractor_name
@@ -224,14 +232,36 @@ class AnicliApp(App[None]):
         from anicli.common.updater import check_for_updates
 
         result = await check_for_updates()
+        if result["anicli_ru"]["is_outdated"]:
+            self._new_version = result["anicli_ru"]["latest_version"]
+            self.refresh_bindings()
         outdated = [
             f"{info['package_name']} {info['current_version']} → {info['latest_version']}"
             for info in result.values()
             if info["is_outdated"]
         ]
         if outdated:
-            self.notify(
-                "\n".join(outdated) + "\n" + t("Run `anihub update` to upgrade"),
-                title=t("Update available"),
-                timeout=8,
-            )
+            # F9 stays in the footer after the notification is gone
+            hint = t("F9 — update now") if self._new_version else t("Run `anihub update` to upgrade")
+            self.notify("\n".join(outdated) + "\n" + hint, title=t("Update available"), timeout=20)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "update":
+            return self._new_version is not None
+        return True
+
+    def action_update(self) -> None:
+        """Close the app and install the new release in the terminal (`anihub update`)."""
+        if self._new_version is None:
+            return
+        question = t(
+            "Update anihub {current} → {latest}? anihub will close and the update will run in the terminal.",
+            current=anicli.__version__,
+            latest=self._new_version,
+        )
+
+        def answer(confirmed: bool | None) -> None:
+            if confirmed:
+                self.exit(EXIT_UPDATE)
+
+        self.push_screen(ConfirmScreen(question, yes=t("Update"), no=t("Later")), answer)

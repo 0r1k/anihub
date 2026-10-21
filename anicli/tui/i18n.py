@@ -23,6 +23,13 @@ RU: dict[str, str] = {
     "Playback error: {error}": "Ошибка воспроизведения: {error}",
     "Update available": "Доступно обновление",
     "Run `anihub update` to upgrade": "Обновите: anihub update",
+    "Update anihub": "Обновить anihub",
+    "F9 — update now": "F9 — обновить сейчас",
+    "Update anihub {current} → {latest}? anihub will close and the update will run in the terminal.": (
+        "Обновить anihub {current} → {latest}? anihub закроется, обновление пойдёт в терминале."
+    ),
+    "Update": "Обновить",
+    "Later": "Позже",
     "Player not found: {command}. Choose another one in settings (F2)": (
         "Плеер не найден: {command}. Выберите другой в настройках (F2)"
     ),
@@ -248,6 +255,13 @@ UK: dict[str, str] = {
     "Playback error: {error}": "Помилка відтворення: {error}",
     "Update available": "Доступне оновлення",
     "Run `anihub update` to upgrade": "Оновіть: anihub update",
+    "Update anihub": "Оновити anihub",
+    "F9 — update now": "F9 — оновити зараз",
+    "Update anihub {current} → {latest}? anihub will close and the update will run in the terminal.": (
+        "Оновити anihub {current} → {latest}? anihub закриється, оновлення піде в терміналі."
+    ),
+    "Update": "Оновити",
+    "Later": "Пізніше",
     "Player not found: {command}. Choose another one in settings (F2)": (
         "Плеєр не знайдено: {command}. Оберіть інший у налаштуваннях (F2)"
     ),

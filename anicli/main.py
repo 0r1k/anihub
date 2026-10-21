@@ -260,6 +260,7 @@ def tui(
         raise BadParameter(msg)
 
     from .tui import AnicliApp, Session, Settings
+    from .tui.app import EXIT_UPDATE
 
     headers = parse_args_headers(header) if header else {}
     if headers_file:
@@ -290,7 +291,9 @@ def tui(
         headers=headers,
         cookies=cookies,
     )
-    AnicliApp(Session(settings), query=search, ongoing=ongoing).run()
+    if AnicliApp(Session(settings), query=search, ongoing=ongoing).run() == EXIT_UPDATE:
+        # confirmed in the app (F9): the terminal is free for the installer output now
+        update(force=False, yes=True)
 
 
 # backward compatibility: `anihub cli ...` runs the same TUI
