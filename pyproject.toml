@@ -1,6 +1,6 @@
 [project]
 name = "anihub"
-version="7.5"
+version="7.6"
 description = 'TUI tool for watching anime with russian and ukrainian dubbing or subtitles'
 readme = "README.md"
 requires-python = ">=3.10"
