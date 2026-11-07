@@ -9,23 +9,55 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import sys
 from collections import OrderedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+
+from . import logs
 
 if TYPE_CHECKING:
     from textual.widget import Widget
 
 logger = logging.getLogger(__name__)
 
+
+@contextmanager
+def _console_escape_sequences() -> Iterator[None]:
+    """Let the Windows console understand the query textual-image sends on import.
+
+    Textual turns escape sequences on only when the app starts. Until then cmd.exe prints them as text
+    and does not reply: garbage on the screen and a 2 seconds timeout on every start.
+    """
+    out = sys.__stdout__
+    if sys.platform != "win32" or out is None or not out.isatty():
+        yield
+        return
+
+    from textual.drivers import win32
+
+    mode = win32.get_console_mode(out)
+    win32.set_console_mode(out, mode | win32.ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+    try:
+        yield
+    finally:
+        win32.set_console_mode(out, mode)
+
+
+# a failed terminal query is logged with a traceback: without handlers yet it would go to stderr
+logs.setup()
+
 try:
-    from PIL import Image as PILImage
-    from textual_image.renderable import Image as DetectedRenderable
-    from textual_image.renderable import SixelImage as SixelRenderable
-    from textual_image.widget import HalfcellImage
-    from textual_image.widget import Image as PosterImage
+    with _console_escape_sequences():
+        from PIL import Image as PILImage
+        from textual_image.renderable import Image as DetectedRenderable
+        from textual_image.renderable import SixelImage as SixelRenderable
+        from textual_image.widget import HalfcellImage
+        from textual_image.widget import Image as PosterImage
 except Exception:
     # not installed or the terminal query failed: titles are shown without posters
     logger.debug("textual-image is not available, posters are disabled", exc_info=True)
