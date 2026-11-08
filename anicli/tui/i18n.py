@@ -189,8 +189,10 @@ UK: dict[str, str] = {
     "Log in": "Увійти",
     "Enter the Client ID first": "Спочатку вкажіть Client ID",
     "Show posters on the title page": "Показувати постери на сторінці тайтла",
-    "The terminal draws no images (kitty graphics protocol or sixel): posters are not shown": (
-        "Термінал не малює зображень (kitty graphics protocol чи sixel): постери не показуються"
+    "The terminal draws no images: posters are made of colored blocks. "
+    "Windows Terminal 1.22+, WezTerm or kitty show real ones": (
+        "Термінал не малює зображень: постери складені з кольорових блоків. "
+        "Справжні показують Windows Terminal 1.22+, WezTerm або kitty"
     ),
     "Subtitles from other sites": "Субтитри з інших сайтів",
     "SUB": "СУБ",
@@ -290,6 +292,12 @@ UK: dict[str, str] = {
     "Hide": "Приховати",
     "Mark all as read": "Позначити все прочитаним",
     "No new related titles": "Нових пов'язаних тайтлів немає",
+    "MyAnimeList limits requests: the rest will be checked in a few minutes": (
+        "MyAnimeList обмежує запити: решту буде перевірено за кілька хвилин"
+    ),
+    "checked {checked} of {total}, the rest in a few minutes": (
+        "перевірено {checked} з {total}, решта — за кілька хвилин"
+    ),
     "Checking related titles: {done} of {total}…": "Перевірка пов'язаних тайтлів: {done} з {total}…",
     "Related titles not in your list: {total} · new: {unread}": (
         "Пов'язані тайтли не у списку: {total} · нових: {unread}"

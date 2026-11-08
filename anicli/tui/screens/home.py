@@ -16,7 +16,7 @@ from textual.widgets import Button, Footer, Header, Input, OptionList, Select, T
 
 from anicli.common import history, mal_links, ongoing_state
 from anicli.common.mal import STATUSES, MalAnime, MalError
-from anicli.common.mal_feed import RELATIONS, Feed, FeedItem
+from anicli.common.mal_feed import RELATIONS, RETRY_AFTER, Feed, FeedItem
 
 from .. import mal, ongoing, playback, watching
 from ..i18n import localized_bindings, t
@@ -596,7 +596,15 @@ class HomeScreen(Screen[None]):
         finally:
             stop_loading(results)
         self._feed_loaded = True
-        results.empty_text = t("No new related titles")
+        incomplete = self._feed.incomplete
+        results.empty_text = (
+            t("MyAnimeList limits requests: the rest will be checked in a few minutes")
+            if incomplete
+            else t("No new related titles")
+        )
+        if self._feed.limited:
+            # MAL lifts the limit in a few minutes: go on from where the check stopped
+            self.set_timer(RETRY_AFTER, self.load_feed)
         self._show_feed()
         self.focus_loaded("feed")
 
@@ -609,11 +617,13 @@ class HomeScreen(Screen[None]):
         if current in items:
             results.highlighted = items.index(current)
         unread = sum(1 for i in items if feed is not None and feed.is_unread(i))
-        results.border_title = (
-            t("Related titles not in your list: {total} · new: {unread}", total=len(items), unread=unread)
-            if items
-            else ""
-        )
+        parts = []
+        if items:
+            parts.append(t("Related titles not in your list: {total} · new: {unread}", total=len(items), unread=unread))
+        if feed is not None and feed.incomplete:
+            checked, total = feed.incomplete
+            parts.append(t("checked {checked} of {total}, the rest in a few minutes", checked=checked, total=total))
+        results.border_title = " · ".join(parts)
         tab = self.query_one(TabbedContent).get_tab("feed")
         tab.label = f"{t('Notifications')} ({unread})" if unread else t("Notifications")
 

@@ -69,6 +69,10 @@ class MalAuthError(MalError):
     """Not logged in or the refresh token is revoked/expired: the user should log in again."""
 
 
+class MalRateLimited(MalError):
+    """MAL refuses too frequent requests: 429, or 307 to an HTML page instead of the API answer."""
+
+
 @dataclass
 class ListStatus:
     status: str | None = None
@@ -391,6 +395,9 @@ class MalClient:
                 self.logout()
                 msg = "MyAnimeList session expired, log in again"
                 raise MalAuthError(msg)
+            if resp.status_code in (307, 429):
+                msg = f"MyAnimeList limits requests ({resp.status_code}), try again in a few minutes"
+                raise MalRateLimited(msg)
             if resp.status_code >= 400:
                 msg = f"MyAnimeList error {resp.status_code}: {resp.text[:200]}"
                 raise MalError(msg)

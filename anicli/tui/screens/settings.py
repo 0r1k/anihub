@@ -80,9 +80,12 @@ class SettingsScreen(ModalScreen[set[str]]):
                 [(name, code) for code, name in LANGUAGES.items()], value=s.language, allow_blank=False, id="language"
             )
             yield Checkbox(t("Show posters on the title page"), s.posters, id="posters")
-            if not posters.AVAILABLE:
+            if not posters.GRAPHICS:
                 yield Static(
-                    t("The terminal draws no images (kitty graphics protocol or sixel): posters are not shown"),
+                    t(
+                        "The terminal draws no images: posters are made of colored blocks. "
+                        "Windows Terminal 1.22+, WezTerm or kitty show real ones"
+                    ),
                     classes="dialog-hint",
                     markup=False,
                 )

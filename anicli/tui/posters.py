@@ -1,6 +1,6 @@
-"""Title posters via textual-image: kitty graphics protocol or sixel, real images only.
+"""Title posters via textual-image: kitty graphics protocol or sixel, colored half blocks as a fallback.
 
-Terminals without them get no posters: colored half blocks look like a pixel mess, not like a poster.
+The old Windows console (conhost) and other terminals without graphics can draw half blocks only.
 
 textual-image queries the terminal on import, before Textual takes over stdin: this module must be
 imported before the app runs (it is, through the screens imports).
@@ -67,8 +67,9 @@ except Exception:
     PosterImage = None  # type: ignore[assignment,misc]
     DetectedRenderable = SixelRenderable = TGPRenderable = None  # type: ignore[assignment,misc]
 
-# the terminal draws real images: kitty graphics protocol or sixel (not half blocks or unicode)
-AVAILABLE = PosterImage is not None and DetectedRenderable in (SixelRenderable, TGPRenderable)
+AVAILABLE = PosterImage is not None
+# the terminal draws real images: kitty graphics protocol or sixel (otherwise colored half blocks)
+GRAPHICS = AVAILABLE and DetectedRenderable in (SixelRenderable, TGPRenderable)
 # enough for a sidebar poster, less data to send to the terminal on every redraw
 _MAX_SIZE = (400, 600)
 _CACHE_SIZE = 32
@@ -113,5 +114,5 @@ async def fetch(client: httpx.AsyncClient, url: str) -> Any:
 
 
 def make_widget(**kwargs: Any) -> Widget | None:
-    """Poster widget, None if the terminal cannot draw images (the layout goes without the poster then)."""
+    """Poster widget in the best the terminal can draw, None without textual-image (no poster in the layout)."""
     return PosterImage(**kwargs) if AVAILABLE else None
