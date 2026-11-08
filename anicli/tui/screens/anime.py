@@ -16,6 +16,7 @@ from textual.widgets import Button, Footer, Header, Input, OptionList, Select, S
 from textual.widgets.selection_list import Selection
 
 from anicli.common import mal_links
+from anicli.common.episodes import split_leaked
 from anicli.common.extractors import dynamic_load_extractor_module
 from anicli.common.mal import STATUSES, MalAnime, MalError
 
@@ -66,7 +67,10 @@ class AnimeScreen(Screen[None]):
         self.item = item
         self.extractor_name = extractor_name
         self.anime: BaseAnime | None = None
+        # all episodes of the site; shown ones (indices of the list) and hidden leaked ones
+        self.all_episodes: Sequence[BaseEpisode] = []
         self.episodes: Sequence[BaseEpisode] = []
+        self.leaked: list[BaseEpisode] = []
         self.chosen: list[int] = []
         # chosen in the MyAnimeList tab before searching the title on the site
         self.mal_hint = mal_hint
@@ -134,12 +138,10 @@ class AnimeScreen(Screen[None]):
     async def load_anime(self, *, refresh: bool = False) -> None:
         episodes_list = self.query_one(EpisodeList)
         old_count = len(self.episodes)
-        marked = set(episodes_list.selected)
-        highlighted = episodes_list.highlighted
         episodes_list.loading = True
         try:
             self.anime = await self.item.a_get_anime()
-            self.episodes = await self.anime.a_get_episodes()
+            self.all_episodes = await self.anime.a_get_episodes()
         except Exception as e:
             self.notify(t("Failed to load the title: {error}", error=e), severity="error", markup=False)
             return
@@ -153,24 +155,53 @@ class AnimeScreen(Screen[None]):
             self.load_mal()
         elif not refresh:
             self._update_poster()
-        episodes_list.clear_options()
+        self._show_episodes(*self._split_episodes())
         if not self.episodes:
             self.notify(t("No episodes available"), severity="warning", markup=False)
             return
-        episodes_list.add_options(
-            Selection(self._episode_label(ep), i, i in marked) for i, ep in enumerate(self.episodes)
-        )
         if not refresh:
-            episodes_list.highlighted = 0
             episodes_list.focus()
             return
 
-        episodes_list.highlighted = min(highlighted or 0, len(self.episodes) - 1)
         new_count = len(self.episodes) - old_count
         if new_count > 0:
             self.notify(t("New episodes: {count}", count=new_count))
         else:
             self.notify(t("No new episodes"))
+
+    def _split_episodes(self) -> tuple[list[BaseEpisode], list[BaseEpisode]]:
+        """(shown, hidden leaked episodes): a title finished on MyAnimeList has nothing to leak."""
+        if self.app.session.settings.show_leaked or (self.mal and self.mal.airing_status == "finished_airing"):
+            return list(self.all_episodes), []
+        return split_leaked(self.all_episodes)
+
+    def filter_episodes(self) -> None:
+        """Show or hide leaked episodes again: the setting or the MAL entry changed."""
+        shown, leaked = self._split_episodes()
+        if [id(e) for e in shown] != [id(e) for e in self.episodes]:
+            self._show_episodes(shown, leaked)
+
+    def _show_episodes(self, episodes: list[BaseEpisode], leaked: list[BaseEpisode]) -> None:
+        """Fill the list; marks, the cursor and the chosen episodes follow the episode numbers."""
+        episodes_list = self.query_one(EpisodeList)
+        old = list(self.episodes)
+        marked = {old[i].ordinal for i in episodes_list.selected if i < len(old)}
+        chosen = [old[i].ordinal for i in self.chosen if i < len(old)]
+        cursor = episodes_list.highlighted
+        current = old[cursor].ordinal if cursor is not None and cursor < len(old) else None
+
+        self.episodes, self.leaked = episodes, leaked
+        ordinals = [ep.ordinal for ep in episodes]
+        self.chosen = [ordinals.index(o) for o in chosen if o in ordinals]
+        episodes_list.clear_options()
+        episodes_list.add_options(
+            Selection(self._episode_label(ep), i, ep.ordinal in marked) for i, ep in enumerate(episodes)
+        )
+        if current in ordinals:
+            episodes_list.highlighted = ordinals.index(current)
+        elif episodes:
+            episodes_list.highlighted = min(cursor or 0, len(episodes) - 1)
+        self._refresh_watched()
 
     @work(exclusive=True, group="anime")
     async def load_sources(self, indices: list[int]) -> None:
@@ -289,6 +320,9 @@ class AnimeScreen(Screen[None]):
             parts.append(t("watched {count}", count=len(episodes.watched)))
         if count := len(episodes.selected):
             parts.append(t("marked {count}", count=count))
+        if self.leaked:
+            numbers = ", ".join(str(ep.ordinal) for ep in sorted(self.leaked, key=lambda ep: int(ep.ordinal)))
+            parts.append(t("leak hidden: {episodes} (F2)", episodes=numbers))
         episodes.border_title = " · ".join(parts)
 
     @on(EpisodeList.Chosen)
@@ -472,6 +506,7 @@ class AnimeScreen(Screen[None]):
             else:
                 status_select.clear()
         self.query_one("#mal-remove", Button).disabled = anime is None or anime.list_status is None
+        self.filter_episodes()
         self._refresh_watched()
         self._update_poster()
         self.refresh_bindings()

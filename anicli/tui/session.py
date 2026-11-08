@@ -43,6 +43,7 @@ PERSISTENT_FIELDS = (
     "subtitles_first",
     "ongoing_filter",
     "stream_proxy",
+    "show_leaked",
 )
 
 
@@ -77,6 +78,8 @@ class Settings:
     ongoing_filter: str = "airing"
     # players load videos through anihub: see anicli.common.stream_proxy
     stream_proxy: bool = True
+    # episodes dubbed before their release (1-6 and 12): see anicli.common.episodes
+    show_leaked: bool = False
     headers: dict[str, str] = field(default_factory=dict)
     cookies: CookieJar | None = None
 
@@ -114,9 +117,11 @@ class Settings:
     def player_executable(self) -> str:
         return player_command(self.player, self.player_command)
 
+    def persistent(self) -> dict[str, Any]:
+        return {k: getattr(self, k) for k in PERSISTENT_FIELDS}
+
     def save(self) -> None:
-        data = {k: getattr(self, k) for k in PERSISTENT_FIELDS}
-        self.path().write_text(json.dumps(data, ensure_ascii=False, indent=4), encoding="utf-8")
+        self.path().write_text(json.dumps(self.persistent(), ensure_ascii=False, indent=4), encoding="utf-8")
 
 
 class Session:

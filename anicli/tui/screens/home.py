@@ -498,7 +498,7 @@ class HomeScreen(Screen[None]):
         semaphore = asyncio.Semaphore(watching.CONCURRENCY)
 
         async def check(entry: watching.Entry) -> None:
-            await watching.check(entry, semaphore, force=force)
+            await watching.check(entry, semaphore, force=force, show_leaked=self.app.session.settings.show_leaked)
             self._show_watching(items)
 
         await asyncio.gather(*(check(e) for e in items if e.item is not None))

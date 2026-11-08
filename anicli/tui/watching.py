@@ -16,11 +16,14 @@ from typing import TYPE_CHECKING, Any
 from rich.text import Text
 
 from anicli.common import mal_links, ongoing_state
+from anicli.common.episodes import split_leaked
 
 from . import mal, ongoing
 from .i18n import t
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from anicli.common.mal import MalAnime
 
     from .session import Session
@@ -31,7 +34,8 @@ SITE_TIMEOUT = 20
 CONCURRENCY = 6
 # available episodes are cached: returning from the title page should not ask all sites again
 CACHE_TTL = 600
-_cache: dict[tuple[str, str], tuple[float, int]] = {}
+# (time, (the last episode, the last one without leaked episodes))
+_cache: dict[tuple[str, str], tuple[float, tuple[int, int]]] = {}
 
 
 @dataclass
@@ -74,9 +78,7 @@ def entries(session: Session, animes: list[MalAnime]) -> list[Entry]:
     return result
 
 
-async def _available(item: Any) -> int:
-    anime = await item.a_get_anime()
-    episodes = await anime.a_get_episodes()
+def _last(episodes: Sequence[Any]) -> int:
     ordinals = []
     for episode in episodes:
         try:
@@ -86,17 +88,27 @@ async def _available(item: Any) -> int:
     return max(ordinals, default=len(episodes))
 
 
-async def check(entry: Entry, semaphore: asyncio.Semaphore, *, force: bool = False) -> None:
+async def _available(item: Any) -> tuple[int, int]:
+    """The last episode on the site: with the leaked ones and without them."""
+    anime = await item.a_get_anime()
+    episodes = await anime.a_get_episodes()
+    return _last(episodes), _last(split_leaked(episodes)[0])
+
+
+async def check(entry: Entry, semaphore: asyncio.Semaphore, *, force: bool = False, show_leaked: bool = False) -> None:
     """Fill `entry.available` from the site of the link (cached for CACHE_TTL)."""
     key = (entry.extractor_name, entry.item.url)
+    # a title finished on MyAnimeList has nothing to leak: see anicli.common.episodes
+    with_leaked = show_leaked or entry.anime.airing_status == "finished_airing"
     cached = _cache.get(key)
     if cached and not force and time.time() - cached[0] < CACHE_TTL:
-        entry.available, entry.checking = cached[1], False
+        entry.available, entry.checking = cached[1][0 if with_leaked else 1], False
         return
     try:
         async with semaphore:
-            entry.available = await asyncio.wait_for(_available(entry.item), SITE_TIMEOUT)
-        _cache[key] = (time.time(), entry.available)
+            available = await asyncio.wait_for(_available(entry.item), SITE_TIMEOUT)
+        entry.available = available[0 if with_leaked else 1]
+        _cache[key] = (time.time(), available)
     except Exception:
         entry.failed = True
     finally:

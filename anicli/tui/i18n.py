@@ -62,6 +62,7 @@ RU: dict[str, str] = {
     "Episodes": "Серии",
     "watched {count}": "просмотрено {count}",
     "marked {count}": "отмечено {count}",
+    "leak hidden: {episodes} (F2)": "скрыт слив: {episodes} (F2)",
     "Space to mark, Enter to choose": "Пробел — отметить, Enter — выбрать",
     "Dub / player": "Озвучка / плеер",
     "Episode": "Серия",
@@ -90,7 +91,6 @@ RU: dict[str, str] = {
     ),
     "No saved sources for this title": "Для тайтла нет сохранённых источников",
     # settings
-    "Save": "Сохранить",
     "Cancel": "Отмена",
     "Language": "Язык",
     "Source": "Источник",
@@ -99,15 +99,12 @@ RU: dict[str, str] = {
     "Other (command)": "Другой (команда)",
     "Player command": "Команда плеера",
     "Extra player arguments": "Дополнительные аргументы плеера",
-    "Load video through anihub (fast start, reconnects)": (
-        "Загружать видео через anihub (быстрый старт, переподключение)"
-    ),
+    "Load video through anihub (fast start, reconnects)": ("Видео через anihub (быстрый старт, переподключение)"),
     "Episodes per player playlist": "Серий в одном плейлисте плеера",
     "Proxy": "Прокси",
     "format: scheme://user:password@host:port": "формат: scheme://user:password@host:port",
     "HTTP timeout, seconds": "Таймаут HTTP, секунд",
     "Fix the highlighted fields": "Исправьте выделенные поля",
-    "Enter the player command": "Укажите команду плеера",
     "Settings applied but not saved: {error}": "Настройки применены, но не сохранены: {error}",
     # dialogs
     "Yes": "Да",
@@ -219,6 +216,9 @@ RU: dict[str, str] = {
         "Выберите серию: субтитры с этих сайтов добавятся в список"
     ),
     "Subtitles first in the dub list": "Субтитры первыми в списке озвучек",
+    "Show leaked episodes (12 when only 1-6 are out)": "Показывать слитые серии (12-я, когда вышли 1-6)",
+    "Fields with errors were not saved": "Поля с ошибками не сохранены",
+    "Close": "Закрыть",
     "Airing": "Выходят",
     "Announced": "Анонсы",
     "ANNOUNCED": "АНОНС",
@@ -294,6 +294,7 @@ UK: dict[str, str] = {
     "Episodes": "Серії",
     "watched {count}": "переглянуто {count}",
     "marked {count}": "позначено {count}",
+    "leak hidden: {episodes} (F2)": "приховано злив: {episodes} (F2)",
     "Space to mark, Enter to choose": "Пробіл — позначити, Enter — обрати",
     "Dub / player": "Озвучка / плеєр",
     "Episode": "Серія",
@@ -322,7 +323,6 @@ UK: dict[str, str] = {
     ),
     "No saved sources for this title": "Для тайтла немає збережених джерел",
     # settings
-    "Save": "Зберегти",
     "Cancel": "Скасувати",
     "Language": "Мова",
     "Source": "Джерело",
@@ -331,15 +331,12 @@ UK: dict[str, str] = {
     "Other (command)": "Інший (команда)",
     "Player command": "Команда плеєра",
     "Extra player arguments": "Додаткові аргументи плеєра",
-    "Load video through anihub (fast start, reconnects)": (
-        "Завантажувати відео через anihub (швидкий старт, перепідключення)"
-    ),
+    "Load video through anihub (fast start, reconnects)": ("Відео через anihub (швидкий старт, перепідключення)"),
     "Episodes per player playlist": "Серій в одному плейлисті плеєра",
     "Proxy": "Проксі",
     "format: scheme://user:password@host:port": "формат: scheme://user:password@host:port",
     "HTTP timeout, seconds": "Тайм-аут HTTP, секунд",
     "Fix the highlighted fields": "Виправте виділені поля",
-    "Enter the player command": "Вкажіть команду плеєра",
     "Settings applied but not saved: {error}": "Налаштування застосовано, але не збережено: {error}",
     # dialogs
     "Yes": "Так",
@@ -449,6 +446,9 @@ UK: dict[str, str] = {
         "Оберіть серію: субтитри з цих сайтів додадуться до списку"
     ),
     "Subtitles first in the dub list": "Субтитри першими у списку озвучок",
+    "Show leaked episodes (12 when only 1-6 are out)": "Показувати злиті серії (12-та, коли вийшли 1-6)",
+    "Fields with errors were not saved": "Поля з помилками не збережено",
+    "Close": "Закрити",
     "Airing": "Виходять",
     "Announced": "Анонси",
     "ANNOUNCED": "АНОНС",

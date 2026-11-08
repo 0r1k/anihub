@@ -21,14 +21,16 @@ if sys.platform == "darwin":
 
 import httpx  # noqa: E402
 from anicli_api.player.base import Video  # noqa: E402
+from textual.widgets import Checkbox  # noqa: E402
 
 from anicli.common.config import get_config_dir, get_data_dir  # noqa: E402
+from anicli.common.episodes import leaked_numbers  # noqa: E402
 from anicli.common.extractors import dynamic_load_extractor_module, get_extractor_modules  # noqa: E402
 from anicli.common.players.base import split_args, split_command  # noqa: E402
 from anicli.common.stream_proxy import StreamProxy  # noqa: E402
 from anicli.tui import AnicliApp, Session, Settings  # noqa: E402
-from anicli.tui.subtitles import _Wanted  # noqa: E402
 from anicli.tui.screens.settings import SettingsScreen  # noqa: E402
+from anicli.tui.subtitles import _Wanted  # noqa: E402
 
 
 def check_extractors() -> None:
@@ -72,6 +74,17 @@ def check_title_matching() -> None:
         and seasons.is_exact("Mushoku Tensei 2")
     )
     print("title matching ok")
+
+
+def check_leaked_episodes() -> None:
+    """A few episodes after a gap are a leak, many are a site missing an episode."""
+    assert leaked_numbers([1, 2, 3, 4, 5, 12, 6]) == {12}
+    assert leaked_numbers([*range(1, 7), 12, 13, 24]) == {12, 13, 24}
+    assert leaked_numbers([1, 2, 3, 5, 6, 7, 8]) == set()
+    assert leaked_numbers([1, 2, 3, 4, 6]) == set()
+    assert leaked_numbers([*range(13, 20), "OVA", 0]) == set()
+    assert leaked_numbers([]) == leaked_numbers([7]) == set()
+    print("leaked episodes ok")
 
 
 async def check_stream_proxy() -> None:
@@ -137,8 +150,13 @@ async def check_tui() -> None:
         app.action_settings()
         await pilot.pause(0.3)
         assert isinstance(app.screen, SettingsScreen), app.screen
+        # saved as the fields change, without a Save button
+        app.screen.query_one("#show-leaked", Checkbox).value = True
+        await pilot.pause()
+        assert Settings.load().show_leaked
         await pilot.press("escape")
         await pilot.pause(0.2)
+        assert not isinstance(app.screen, SettingsScreen), app.screen
     await session.aclose()
     print("tui ok")
 
@@ -149,6 +167,7 @@ def main() -> None:
     check_extractors()
     check_commands()
     check_title_matching()
+    check_leaked_episodes()
     asyncio.run(check_stream_proxy())
     asyncio.run(check_tui())
 

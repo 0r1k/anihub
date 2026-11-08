@@ -208,6 +208,9 @@ class AnicliApp(App[str | None]):
         def on_close(changed: set[str] | None) -> None:
             self.sub_title = self.session.settings.extractor_name
             changed = changed or set()
+            for screen in self.screen_stack:
+                if isinstance(screen, AnimeScreen):
+                    screen.filter_episodes()
             if "language" in changed:
                 self.apply_language()
             elif changed - {"mal"}:
