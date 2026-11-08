@@ -15,7 +15,7 @@ from textual.dom import NoScreen
 from textual.message import Message
 from textual.strip import Strip
 from textual.widget import Widget
-from textual.widgets import OptionList, ProgressBar, SelectionList, Static
+from textual.widgets import OptionList, ProgressBar, Select, SelectionList, Static
 from textual.widgets.option_list import Option, OptionDoesNotExist
 
 from .i18n import localized_bindings, t
@@ -98,6 +98,19 @@ class ItemList(_EdgeNavigation, OptionList, Generic[T]):
         if self.highlighted is None or not self.items:
             return None
         return self.items[self.highlighted]
+
+
+class FilterSelect(Select[str]):
+    """Up/down leave the select (like the search input), Enter/Space open it."""
+
+    BINDINGS = [
+        Binding("enter,space", "show_overlay", show=False),
+        Binding("up", "navigate('up')", show=False),
+        Binding("down", "navigate('down')", show=False),
+    ]
+
+    def action_navigate(self, direction: str) -> None:
+        self.post_message(Navigate(self, direction))
 
 
 @localized_bindings

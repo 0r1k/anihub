@@ -91,7 +91,7 @@ class AnimeScreen(Screen[None]):
         yield Header()
         with Horizontal(id="anime-page"):
             settings = self.app.session.settings
-            poster = posters.make_widget(settings.poster_render, id="poster") if settings.posters else None
+            poster = posters.make_widget(id="poster") if settings.posters else None
             if poster is not None:
                 with Vertical(id="anime-side"):
                     yield poster

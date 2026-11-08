@@ -16,25 +16,28 @@ from textual.widgets import Button, Footer, Header, Input, OptionList, Select, T
 
 from anicli.common import history, mal_links, ongoing_state
 from anicli.common.mal import STATUSES, MalAnime, MalError
+from anicli.common.mal_feed import RELATIONS, Feed, FeedItem
 
 from .. import mal, ongoing, playback, watching
 from ..i18n import localized_bindings, t
-from ..widgets import ItemList, Navigate, PlayerBar, stop_loading
+from ..widgets import FilterSelect, ItemList, Navigate, PlayerBar, stop_loading
 from .anime import AnimeScreen
 from .dialogs import ConfirmScreen
+from .profile import ProfileScreen
 
 if TYPE_CHECKING:
     from ..app import AnicliApp
 
 
 HistoryItem = tuple[dict[str, Any], Any]
-TAB_ORDER = ("search", "ongoing", "watching", "history", "mal")
+TAB_ORDER = ("search", "ongoing", "watching", "history", "mal", "feed")
 TAB_CONTENT = {
     "search": "#query",
     "ongoing": "#ongoing-results",
     "watching": "#watching-results",
     "history": "#history-results",
     "mal": "#mal-results",
+    "feed": "#feed-results",
 }
 # MAL tab filter: all statuses
 MAL_ALL = "all"
@@ -68,19 +71,6 @@ class HistoryList(ItemList[HistoryItem]):
         self.screen.reload_history()  # type: ignore[attr-defined]
 
 
-class FilterSelect(Select[str]):
-    """Up/down leave the select (like the search input), Enter/Space open it."""
-
-    BINDINGS = [
-        Binding("enter,space", "show_overlay", show=False),
-        Binding("up", "navigate('up')", show=False),
-        Binding("down", "navigate('down')", show=False),
-    ]
-
-    def action_navigate(self, direction: str) -> None:
-        self.post_message(Navigate(self, direction))
-
-
 @localized_bindings
 class ListSearch(Input):
     """Search in the loaded list: Esc clears the query, the second Esc goes back to the list."""
@@ -92,6 +82,48 @@ class ListSearch(Input):
             self.value = ""
         else:
             self.post_message(Navigate(self, "down"))
+
+
+@localized_bindings
+class FeedList(ItemList[FeedItem]):
+    BINDINGS = [
+        Binding("a", "plan_to_watch", "To Plan to Watch"),
+        Binding("d,delete", "hide", "Hide"),
+        Binding("c", "mark_read", "Mark all as read"),
+    ]
+
+    def action_plan_to_watch(self) -> None:
+        if (current := self.current) is not None:
+            self.screen.feed_plan_to_watch(current)  # type: ignore[attr-defined]
+
+    def action_hide(self) -> None:
+        if (current := self.current) is not None:
+            self.screen.feed_hide(current)  # type: ignore[attr-defined]
+
+    def action_mark_read(self) -> None:
+        self.screen.feed_mark_read()  # type: ignore[attr-defined]
+
+
+def _added(seconds: float, added: float) -> str:
+    """When the title was added to MAL: "5 h ago" for the last month, then the date."""
+    if seconds < 30 * 24 * 3600:
+        return ongoing.ago(seconds)
+    return time.strftime("%Y-%m-%d", time.localtime(added))
+
+
+def _feed_label(item: FeedItem, unread: bool, now: float) -> Text:
+    text = Text()
+    if unread:
+        text.append(f" {t('NEW')} ", style="bold reverse")
+        text.append(" ")
+    text.append(item.anime.title, style="bold")
+    if kind := " ".join(str(i) for i in (item.anime.media_type.upper(), item.anime.year) if i):
+        text.append(f" · {kind}", style="dim")
+    relation = t(RELATIONS.get(item.relation, item.relation.replace("_", " ").title()))
+    text.append(f"\n{relation}: {item.source.title}", style="dim")
+    if item.added:
+        text.append(" · " + t("added to MyAnimeList {when}", when=_added(now - item.added, item.added)), style="dim")
+    return text
 
 
 def _links_by_mal_id() -> dict[int, dict[str, Any]]:
@@ -118,6 +150,8 @@ class HomeScreen(Screen[None]):
         Binding("w", "show_tab('watching')", "Watching"),
         Binding("h", "show_tab('history')", "History"),
         Binding("m", "show_tab('mal')", "MyAnimeList"),
+        Binding("n", "show_tab('feed')", "Notifications"),
+        Binding("p", "profile", "Profile"),
         Binding("r,f5", "refresh", "Refresh"),
         Binding("f", "find", "Find"),
         Binding("up", "arrow('up')", show=False),
@@ -139,6 +173,10 @@ class HomeScreen(Screen[None]):
         self._watching_loaded = False
         # MAL entry being searched on the site from the MAL tab: linked when a result is opened
         self._mal_hint: MalAnime | None = None
+        # related titles not in the list (the API has no MAL notifications), loaded at start for the unread count
+        self._feed: Feed | None = None
+        self._feed_items: list[FeedItem] = []
+        self._feed_loaded = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -171,6 +209,8 @@ class HomeScreen(Screen[None]):
                     )
                     yield Button(t("Random"), id="mal-random")
                 yield ItemList(id="mal-results", empty_text=t("Log in to MyAnimeList in settings (F2)"))
+            with TabPane(t("Notifications"), id="feed"):
+                yield FeedList(id="feed-results", empty_text=t("Log in to MyAnimeList in settings (F2)"))
         yield PlayerBar()
         yield Footer()
 
@@ -185,17 +225,21 @@ class HomeScreen(Screen[None]):
             self.call_after_refresh(self.focus_tab_content)
         else:
             self.query_one("#query", Input).focus()
+        if self.app.session.mal.logged_in:
+            self.load_feed()
 
     def on_screen_resume(self) -> None:
         active = self.query_one(TabbedContent).active
         if active == "history":
             self.reload_history()
         # the list could be changed on the title page
-        self._mal_loaded = self._watching_loaded = False
+        self._mal_loaded = self._watching_loaded = self._feed_loaded = False
         if active == "mal":
             self.load_mal()
         elif active == "watching":
             self.load_watching()
+        elif active == "feed":
+            self.load_feed()
 
     def reset(self) -> None:
         """Drop cached results after extractor or network settings change."""
@@ -207,12 +251,14 @@ class HomeScreen(Screen[None]):
 
     def reset_mal(self) -> None:
         """MAL account changed: reload the lists when the tab is shown."""
-        self._mal_loaded = self._watching_loaded = False
+        self._mal_loaded = self._watching_loaded = self._feed_loaded = False
         active = self.query_one(TabbedContent).active
         if active == "mal":
             self.load_mal()
         elif active == "watching":
             self.load_watching()
+        # the unread count is on the tab: reload it on any tab
+        self.load_feed()
 
     # --- tabs ----------------------------------------------------------------
 
@@ -242,6 +288,8 @@ class HomeScreen(Screen[None]):
             self.load_mal()
         elif tab == "watching" and not self._watching_loaded:
             self.load_watching()
+        elif tab == "feed" and not self._feed_loaded:
+            self.load_feed()
         if focus:
             self.focus_tab_content()
 
@@ -315,6 +363,8 @@ class HomeScreen(Screen[None]):
             self.load_mal()
         elif active == "watching":
             self.load_watching(force=True)
+        elif active == "feed":
+            self.load_feed(force=True)
         elif query := self.query_one("#query", Input).value.strip():
             self.search(query)
 
@@ -517,6 +567,93 @@ class HomeScreen(Screen[None]):
         new = sum(1 for e in items if e.unwatched)
         results.border_title = t("With new episodes: {new} of {total}", new=new, total=len(items)) if items else ""
 
+    # --- notifications -------------------------------------------------------
+
+    @work(exclusive=True, group="feed")
+    async def load_feed(self, *, force: bool = False) -> None:
+        results: FeedList = self.query_one(FeedList)
+        client = self.app.session.mal
+        if not client.logged_in:
+            self._feed_items = []
+            results.empty_text = t("Log in to MyAnimeList in settings (F2)")
+            self._show_feed()
+            return
+        if self._feed is None:
+            self._feed = Feed()
+        # the first load asks MAL about every title of the list: show the progress, keep the old items
+        results.loading = not self._feed_items
+
+        def progress(done: int, total: int) -> None:
+            results.border_title = t("Checking related titles: {done} of {total}…", done=done, total=total)
+
+        try:
+            self._feed_items = await self._feed.load(client, force=force, on_progress=progress)
+        except MalError as e:
+            results.border_title = ""
+            if self.query_one(TabbedContent).active == "feed":
+                self.notify(str(e), severity="error", markup=False)
+            return
+        finally:
+            stop_loading(results)
+        self._feed_loaded = True
+        results.empty_text = t("No new related titles")
+        self._show_feed()
+        self.focus_loaded("feed")
+
+    def _show_feed(self) -> None:
+        results: FeedList = self.query_one(FeedList)
+        feed, items = self._feed, self._feed_items
+        current = results.current
+        now = time.time()
+        results.set_items(items, [_feed_label(i, feed is not None and feed.is_unread(i), now) for i in items])
+        if current in items:
+            results.highlighted = items.index(current)
+        unread = sum(1 for i in items if feed is not None and feed.is_unread(i))
+        results.border_title = (
+            t("Related titles not in your list: {total} · new: {unread}", total=len(items), unread=unread)
+            if items
+            else ""
+        )
+        tab = self.query_one(TabbedContent).get_tab("feed")
+        tab.label = f"{t('Notifications')} ({unread})" if unread else t("Notifications")
+
+    @work(group="mal-update")
+    async def feed_plan_to_watch(self, item: FeedItem) -> None:
+        try:
+            anime, added = await mal.plan_to_watch(self.app.session, item.anime.id)
+        except MalError as e:
+            self.notify(str(e), severity="error", markup=False)
+            return
+        # in the list now: not a notification anymore
+        self._feed_items = [i for i in self._feed_items if i.anime.id != anime.id]
+        self._show_feed()
+        if added:
+            self.notify(t("«{title}» added to Plan to Watch", title=anime.title), markup=False)
+        else:
+            status = anime.list_status.status if anime.list_status else None
+            self.notify(
+                t("«{title}» is in your list already: {status}", title=anime.title, status=mal.status_label(status)),
+                markup=False,
+            )
+
+    def feed_hide(self, item: FeedItem) -> None:
+        if self._feed is not None:
+            self._feed.hide(item.anime.id)
+        self._feed_items = [i for i in self._feed_items if i is not item]
+        self._show_feed()
+
+    def feed_mark_read(self) -> None:
+        if self._feed is not None:
+            self._feed.mark_read()
+            self._show_feed()
+
+    def action_profile(self) -> None:
+        client = self.app.session.mal
+        if not client.logged_in:
+            self.notify(t("Log in to MyAnimeList in settings (F2)"), severity="warning", markup=False)
+            return
+        self.app.push_screen(ProfileScreen(client.username))
+
     def reload_history(self) -> None:
         results: HistoryList = self.query_one(HistoryList)
         entries = history.load(self.app.session.http_kwargs)
@@ -540,6 +677,12 @@ class HomeScreen(Screen[None]):
         results: ItemList[MalAnime] = self.query_one("#mal-results", ItemList)
         if results.items:
             self.open_mal_anime(results.items[event.option_index])
+
+    @on(OptionList.OptionSelected, "#feed-results")
+    def _open_feed(self, event: OptionList.OptionSelected) -> None:
+        results: FeedList = self.query_one(FeedList)
+        if results.items:
+            self.open_mal_anime(results.items[event.option_index].anime)
 
     @on(OptionList.OptionSelected, "#watching-results")
     def _open_watching(self, event: OptionList.OptionSelected) -> None:

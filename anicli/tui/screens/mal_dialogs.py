@@ -116,6 +116,28 @@ class EpisodesScreen(ModalScreen[int | None]):
 
 
 @localized_bindings
+class UserNameScreen(ModalScreen[str | None]):
+    """A MyAnimeList user name to open the profile of."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog"):
+            yield Label(t("MyAnimeList user"), classes="dialog-title")
+            yield Input(placeholder=t("User name, Enter to open the profile"), id="user-name")
+
+    def on_mount(self) -> None:
+        self.query_one(Input).focus()
+
+    @on(Input.Submitted)
+    def _submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip() or None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+@localized_bindings
 class MalSearchScreen(ModalScreen[MalAnime | None]):
     """Choose the MAL entry of the title manually."""
 

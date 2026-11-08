@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 import httpx
 
@@ -55,6 +55,8 @@ SCORE_LABELS = {
     1: "Appalling",
 }
 ANIME_FIELDS = "alternative_titles,main_picture,num_episodes,media_type,start_season,status,my_list_status"
+# public pages of the site: profiles and friends (the API has no other users but their lists)
+SITE_URL = "https://myanimelist.net"
 # refresh the access token a bit before it expires
 _EXPIRY_MARGIN = 300
 
@@ -100,7 +102,12 @@ class MalAnime:
     airing_status: str = ""
     # poster url
     picture: str = ""
+    # the entry in the list that was asked for: own or another user's
     list_status: ListStatus | None = None
+    # the entry in the own list, whatever list was asked for
+    my_list_status: ListStatus | None = None
+    # when the title was added to the MAL database (ISO 8601), only if asked for
+    created_at: str = ""
 
     @property
     def url(self) -> str:
@@ -126,6 +133,8 @@ class MalAnime:
             airing_status=node.get("status", ""),
             picture=picture.get("large") or picture.get("medium") or "",
             list_status=ListStatus.from_json(list_status or node.get("my_list_status")),
+            my_list_status=ListStatus.from_json(node.get("my_list_status")),
+            created_at=node.get("created_at", ""),
         )
 
 
@@ -385,7 +394,13 @@ class MalClient:
             if resp.status_code >= 400:
                 msg = f"MyAnimeList error {resp.status_code}: {resp.text[:200]}"
                 raise MalError(msg)
-            return resp.json() if resp.content else {}
+            if not resp.content:
+                return {}
+            try:
+                return resp.json()
+            except ValueError as e:
+                msg = f"MyAnimeList answered not JSON ({resp.status_code})"
+                raise MalError(msg) from e
         raise AssertionError  # pragma: no cover
 
     # --- anime ---------------------------------------------------------------------
@@ -400,9 +415,32 @@ class MalClient:
         )
         return [MalAnime.from_json(i["node"]) for i in data.get("data", [])]
 
-    async def get_anime(self, anime_id: int) -> MalAnime:
-        data = await self._request("GET", f"/anime/{anime_id}", params={"fields": ANIME_FIELDS})
+    async def get_anime(self, anime_id: int, fields: str = ANIME_FIELDS) -> MalAnime:
+        data = await self._request("GET", f"/anime/{anime_id}", params={"fields": fields})
         return MalAnime.from_json(data)
+
+    async def get_anime_json(self, anime_id: int, fields: str) -> dict[str, Any]:
+        return await self._request("GET", f"/anime/{anime_id}", params={"fields": fields})
+
+    async def related(self, anime_id: int) -> list[tuple[int, str]]:
+        """Related titles (sequels, prequels, side stories…): (MAL id, relation type)."""
+        data = await self._request("GET", f"/anime/{anime_id}", params={"fields": "related_anime"})
+        return [(int(r["node"]["id"]), r.get("relation_type", "")) for r in data.get("related_anime", [])]
+
+    async def page(self, path: str) -> str:
+        """A public page of the site (profiles, friends): the API has nothing about other users."""
+        try:
+            resp = await self.http.get(SITE_URL + path, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
+        except httpx.HTTPError as e:
+            msg = f"MyAnimeList is unavailable: {e}"
+            raise MalError(msg) from e
+        if resp.status_code == 404:
+            msg = "MyAnimeList: no such user"
+            raise MalError(msg)
+        if resp.status_code >= 400:
+            msg = f"MyAnimeList error {resp.status_code}"
+            raise MalError(msg)
+        return resp.text
 
     async def update_list_status(
         self,
@@ -439,8 +477,11 @@ class MalClient:
             if "error 404" not in str(e):
                 raise
 
-    async def user_list(self, status: str | None = None, page_size: int = 100) -> list[MalAnime]:
-        """The user anime list (or its part with the given status), recently updated first."""
+    async def user_list(self, status: str | None = None, page_size: int = 1000, user: str = "@me") -> list[MalAnime]:
+        """The anime list of the user (own by default) or its part with the given status, recently updated first.
+
+        Another user's entries are in `list_status`, own ones in `my_list_status`.
+        """
         params: dict[str, Any] = {
             "fields": f"list_status,{ANIME_FIELDS}",
             "sort": "list_updated_at",
@@ -452,7 +493,8 @@ class MalClient:
             params["status"] = status
         result: list[MalAnime] = []
         while True:
-            data = await self._request("GET", "/users/@me/animelist", params=params)
+            # "@me" must stay as is: MAL redirects "%40me" to an HTML page
+            data = await self._request("GET", f"/users/{quote(user, safe='@')}/animelist", params=params)
             items = data.get("data", [])
             result.extend(MalAnime.from_json(i["node"], i.get("list_status")) for i in items)
             if not data.get("paging", {}).get("next") or not items:

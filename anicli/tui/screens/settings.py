@@ -23,11 +23,6 @@ if TYPE_CHECKING:
     from ..app import AnicliApp
 
 PLAYER_LABELS = {"mpv": "mpv", "vlc": "VLC", "custom": "Other (command)"}
-POSTER_RENDER_LABELS = {
-    "auto": "Auto (no sixel)",
-    "graphics": "Graphics (kitty protocol / sixel)",
-    "blocks": "Colored blocks",
-}
 
 
 def _is_proxy(value: str) -> bool:
@@ -85,13 +80,12 @@ class SettingsScreen(ModalScreen[set[str]]):
                 [(name, code) for code, name in LANGUAGES.items()], value=s.language, allow_blank=False, id="language"
             )
             yield Checkbox(t("Show posters on the title page"), s.posters, id="posters")
-            yield Label(t("Poster rendering"))
-            yield NavSelect(
-                [(t(POSTER_RENDER_LABELS[mode]), mode) for mode in posters.RENDER_MODES],
-                value=s.poster_render if s.poster_render in posters.RENDER_MODES else "graphics",
-                allow_blank=False,
-                id="poster-render",
-            )
+            if not posters.AVAILABLE:
+                yield Static(
+                    t("The terminal draws no images (kitty graphics protocol or sixel): posters are not shown"),
+                    classes="dialog-hint",
+                    markup=False,
+                )
             yield Checkbox(t("Subtitles first in the dub list"), s.subtitles_first, id="subtitles-first")
             yield Checkbox(
                 t("Show leaked episodes (12 when only 1-6 are out)"),
@@ -224,7 +218,6 @@ class SettingsScreen(ModalScreen[set[str]]):
 
         s.language = str(self.query_one("#language", Select).value)
         s.posters = self.query_one("#posters", Checkbox).value
-        s.poster_render = str(self.query_one("#poster-render", Select).value)
         s.subtitles_first = self.query_one("#subtitles-first", Checkbox).value
         s.show_leaked = self.query_one("#show-leaked", Checkbox).value
         s.extractor_name = str(self.query_one("#extractor", Select).value)

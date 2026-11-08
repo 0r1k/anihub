@@ -108,3 +108,12 @@ async def episode_watched(session: Session, mal_id: int, episode: int) -> tuple[
     if fields:
         anime.list_status = await session.mal.update_list_status(mal_id, **fields)
     return anime, fields
+
+
+async def plan_to_watch(session: Session, anime_id: int) -> tuple[MalAnime, bool]:
+    """Add the title to Plan to Watch unless it is in the list already: (the entry, added)."""
+    anime = await session.mal.get_anime(anime_id)
+    if anime.list_status is not None:
+        return anime, False
+    anime.list_status = anime.my_list_status = await session.mal.update_list_status(anime_id, status="plan_to_watch")
+    return anime, True

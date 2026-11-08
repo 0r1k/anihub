@@ -26,6 +26,7 @@ from textual.widgets import Checkbox  # noqa: E402
 from anicli.common.config import get_config_dir, get_data_dir  # noqa: E402
 from anicli.common.episodes import leaked_numbers  # noqa: E402
 from anicli.common.extractors import dynamic_load_extractor_module, get_extractor_modules  # noqa: E402
+from anicli.common.mal_profile import parse_friends, parse_profile  # noqa: E402
 from anicli.common.players.base import split_args, split_command  # noqa: E402
 from anicli.common.stream_proxy import StreamProxy  # noqa: E402
 from anicli.tui import AnicliApp, Session, Settings  # noqa: E402
@@ -87,6 +88,57 @@ def check_leaked_episodes() -> None:
     print("leaked episodes ok")
 
 
+PROFILE_PAGE = """<html><body>
+<div class="user-image mb8"><img class="lazyload" data-src="https://cdn/avatar.jpg"></div>
+<ul class="user-status border-top pb8 mb4">
+<li class="clearfix"><span class="user-status-title">Last Online</span><span class="user-status-data">Now</span></li>
+<li class="clearfix"><span class="user-status-title">Joined</span>
+<span class="user-status-data">May 19, 2024</span></li>
+</ul>
+<div class="user-profile-about"><div class="profile-about-user">Hello<br><br>world</div></div>
+<div class="stats anime">
+<div class="stat-score"><div><span>Days: </span>41.6</div><div><span>Mean Score: </span><span>8.48</span></div></div>
+<ul class="stats-status fl-l">
+<li><a class="circle anime watching">Watching</a><span>8</span></li>
+<li><a class="circle anime completed">Completed</a><span>1,124</span></li>
+</ul>
+<ul class="stats-data fl-r"><li><span>Total Entries</span><span>1,132</span></li></ul>
+</div>
+<div class="updates anime"><div class="statistics-updates"><div class="data">
+<a href="https://myanimelist.net/anime/61578/Seitokai">Seitokai ni mo Ana wa Aru!</a>
+<div class="graph-content"><span class="fl-r fn-grey2">59 minutes ago</span>
+<div class="graph"><span class="graph-inner anime watching"></span></div></div>
+<div class="fn-grey2"> Watching <span>5</span>/12 · Scored <span>6</span></div>
+</div></div></div>
+<div id="anime_favorites"><ul><li title="Cowboy Bebop"><a href="https://myanimelist.net/anime/1/Cowboy_Bebop">
+<span class="title">Cowboy Bebop</span><span class="users">TV·1998</span></a></li></ul></div>
+</body></html>"""
+FRIENDS_PAGE = """<div class="boxlist-container friend mb16"><div class="boxlist col-3"><div class="data">
+<div class="title"><a href="https://myanimelist.net/profile/D_FNX">D_FNX</a></div>
+<div class="di-ib mt4 fn-grey2"> Yesterday, 8:36 AM </div>
+<div class="di-ib mt4 fn-grey2"> Friends since May 19, 2024 1:35 PM </div>
+</div></div></div>"""
+
+
+def check_mal_profile() -> None:
+    """The profile and friends pages of the site (the MAL API has no other users)."""
+    profile = parse_profile("or1k", PROFILE_PAGE)
+    assert profile.avatar == "https://cdn/avatar.jpg", profile.avatar
+    assert profile.status == [("Last Online", "Now"), ("Joined", "May 19, 2024")], profile.status
+    assert profile.about == "Hello\n\nworld", profile.about
+    assert (profile.anime.days, profile.anime.mean_score) == ("41.6", "8.48"), profile.anime
+    assert [(s.status, s.count) for s in profile.anime.statuses] == [("watching", 8), ("completed", 1124)]
+    assert profile.anime.data == [("Total Entries", "1,132")], profile.anime.data
+    (update,) = profile.updates
+    assert (update.anime_id, update.status, update.ago) == (61578, "watching", "59 minutes ago"), update
+    assert update.details == "Watching 5/12 · Scored 6", update.details
+    assert [(f.kind, f.title, f.anime_id) for f in profile.favorites] == [("anime", "Cowboy Bebop", 1)]
+    (friend,) = parse_friends(FRIENDS_PAGE)
+    assert friend.name == "D_FNX", friend
+    assert (friend.last_online, friend.since) == ("Yesterday, 8:36 AM", "May 19, 2024 1:35 PM"), friend
+    print("mal profile ok")
+
+
 async def check_stream_proxy() -> None:
     """The proxy rewrites playlists, passes headers and ranges, resumes a body broken by the hosting."""
     segment = bytes(range(256)) * 400
@@ -144,7 +196,7 @@ async def check_tui() -> None:
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         home = app.screen
-        for tab in ("ongoing", "watching", "history", "mal", "search"):
+        for tab in ("ongoing", "watching", "history", "mal", "feed", "search"):
             home.action_show_tab(tab)  # type: ignore[attr-defined]
             await pilot.pause(0.2)
         app.action_settings()
@@ -168,6 +220,7 @@ def main() -> None:
     check_commands()
     check_title_matching()
     check_leaked_episodes()
+    check_mal_profile()
     asyncio.run(check_stream_proxy())
     asyncio.run(check_tui())
 

@@ -39,7 +39,6 @@ PERSISTENT_FIELDS = (
     "mal_auto_update",
     "theme",
     "posters",
-    "poster_render",
     "subtitles_first",
     "ongoing_filter",
     "stream_proxy",
@@ -70,8 +69,6 @@ class Settings:
     theme: str = ""
     # show posters on the title page (textual-image)
     posters: bool = True
-    # graphics (kitty protocol / sixel), auto (no sixel), blocks: see anicli.tui.posters.make_widget
-    poster_render: str = "graphics"
     # players with subtitles (original audio) on top of the dub list
     subtitles_first: bool = True
     # ongoing tab filter: all, airing, announced

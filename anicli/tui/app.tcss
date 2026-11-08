@@ -232,3 +232,79 @@ ModalScreen {
 .dialog-buttons Button {
     margin-left: 1;
 }
+
+/* --- MyAnimeList profile --------------------------------------------------- */
+
+#profile-page {
+    height: 1fr;
+}
+
+#profile-side {
+    width: 34;
+    height: 1fr;
+    padding: 1 0 0 2;
+}
+
+ProfileScreen.-narrow #avatar {
+    display: none;
+}
+
+#avatar {
+    width: 30;
+    height: auto;
+    max-height: 50%;
+}
+
+#profile-status {
+    height: auto;
+    margin: 1 0;
+}
+
+#profile-friends {
+    min-height: 6;
+}
+
+#profile-main {
+    width: 1fr;
+}
+
+#profile-info {
+    height: auto;
+    max-height: 60%;
+    padding: 1 2 0 2;
+}
+
+#profile-about {
+    height: auto;
+    max-height: 6;
+    margin-bottom: 1;
+}
+
+#profile-stats {
+    height: auto;
+}
+
+#stats-anime, #stats-manga {
+    width: 1fr;
+    height: auto;
+    padding-right: 2;
+}
+
+#profile-lists {
+    height: 1fr;
+    padding: 0 1;
+}
+
+#profile-updates, #profile-favorites {
+    width: 1fr;
+}
+
+#user-list-page {
+    height: 1fr;
+    padding: 0 1;
+}
+
+#user-list-filter {
+    width: 30;
+    margin: 1 0 0 0;
+}

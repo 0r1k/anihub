@@ -199,6 +199,28 @@ class AnicliApp(App[str | None]):
             t("MyAnimeList updated: {summary}", summary=mal.describe(anime, with_status=True).plain), markup=False
         )
 
+    def open_mal_anime(self, anime: MalAnime) -> None:
+        """Open a MAL entry from any screen: the linked title page on top, otherwise search it from the home screen."""
+        link = mal_links.find_by_mal_id(anime.id, self.session.settings.extractor_name)
+        if link:
+            try:
+                item = mal_links.restore(link, self.session.http_kwargs)
+            except Exception:
+                self.log.warning(f"broken MAL link: {link}")
+            else:
+                self.push_screen(AnimeScreen(item, link["extractor_name"]))
+                return
+        self.go_home()
+        self._home.open_mal_anime(anime)
+
+    def go_home(self) -> None:
+        while len(self.screen_stack) > 2:
+            self.pop_screen()
+
+    def show_home_tab(self, tab: str) -> None:
+        self.go_home()
+        self._home.action_show_tab(tab)
+
     # --- settings ------------------------------------------------------------
 
     def action_settings(self) -> None:
@@ -224,8 +246,7 @@ class AnicliApp(App[str | None]):
         """Translate bindings and rebuild screens: texts are rendered at compose time."""
         set_language(self.session.settings.language)
         self._bindings = self._merged_bindings.copy()  # type: ignore[union-attr]
-        while len(self.screen_stack) > 2:
-            self.pop_screen()
+        self.go_home()
         self._home = HomeScreen()
         self.switch_screen(self._home)
         self.refresh_bindings()

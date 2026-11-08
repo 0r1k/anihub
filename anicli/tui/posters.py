@@ -1,4 +1,6 @@
-"""Title posters via textual-image: kitty graphics protocol, sixel or colored half blocks as a fallback.
+"""Title posters via textual-image: kitty graphics protocol or sixel, real images only.
+
+Terminals without them get no posters: colored half blocks look like a pixel mess, not like a poster.
 
 textual-image queries the terminal on import, before Textual takes over stdin: this module must be
 imported before the app runs (it is, through the screens imports).
@@ -56,17 +58,17 @@ try:
         from PIL import Image as PILImage
         from textual_image.renderable import Image as DetectedRenderable
         from textual_image.renderable import SixelImage as SixelRenderable
-        from textual_image.widget import HalfcellImage
+        from textual_image.renderable import TGPImage as TGPRenderable
         from textual_image.widget import Image as PosterImage
 except Exception:
     # not installed or the terminal query failed: titles are shown without posters
     logger.debug("textual-image is not available, posters are disabled", exc_info=True)
     PILImage = None  # type: ignore[assignment]
-    PosterImage = HalfcellImage = None  # type: ignore[assignment,misc]
+    PosterImage = None  # type: ignore[assignment,misc]
+    DetectedRenderable = SixelRenderable = TGPRenderable = None  # type: ignore[assignment,misc]
 
-AVAILABLE = PosterImage is not None
-# settings values: how to draw posters
-RENDER_MODES = ("graphics", "auto", "blocks")
+# the terminal draws real images: kitty graphics protocol or sixel (not half blocks or unicode)
+AVAILABLE = PosterImage is not None and DetectedRenderable in (SixelRenderable, TGPRenderable)
 # enough for a sidebar poster, less data to send to the terminal on every redraw
 _MAX_SIZE = (400, 600)
 _CACHE_SIZE = 32
@@ -110,20 +112,6 @@ async def fetch(client: httpx.AsyncClient, url: str) -> Any:
     return image
 
 
-def uses_sixel() -> bool:
-    return AVAILABLE and DetectedRenderable is SixelRenderable
-
-
-def make_widget(render: str = "graphics", **kwargs: Any) -> Widget | None:
-    """Poster widget for the render mode of the settings.
-
-    - graphics (default): the best the terminal supports (kitty graphics protocol, sixel, half blocks)
-    - blocks: colored half blocks, drawn by Textual itself
-    - auto: graphics, but half blocks instead of sixel. Sixel data is written to the terminal around Textual:
-      when the poster changes under a dialog (Konsole) the terminal scrolls and the layout breaks
-    """
-    if PosterImage is None:
-        return None
-    if render == "blocks" or (render != "graphics" and uses_sixel()):
-        return HalfcellImage(**kwargs)
-    return PosterImage(**kwargs)
+def make_widget(**kwargs: Any) -> Widget | None:
+    """Poster widget, None if the terminal cannot draw images (the layout goes without the poster then)."""
+    return PosterImage(**kwargs) if AVAILABLE else None

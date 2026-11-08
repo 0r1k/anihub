@@ -200,7 +200,7 @@ def tui(
     ] = None,
     lang: Annotated[
         str | None,
-        Option("--lang", click_type=Choice(["en", "ru", "uk"]), help="interface language [default: saved or en]"),
+        Option("--lang", click_type=Choice(["en", "uk"]), help="interface language [default: saved or en]"),
     ] = None,
     m3u_size: Annotated[
         int | None, Option("--m3u-size", min=1, help="max episodes in player playlist [default: saved or 6]")
