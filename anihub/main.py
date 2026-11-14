@@ -7,8 +7,8 @@ from click import Choice
 from rich import get_console
 from typer import BadParameter, Option
 
-import anicli
-from anicli.common.cookies_config import (
+import anihub
+from anihub.common.cookies_config import (
     BROWSER_SUPPORTS,
     parse_args_headers,
     parse_headers_file,
@@ -30,7 +30,7 @@ console = get_console()
 
 
 def _get_extractors_choice():
-    from anicli.common.extractors import get_extractor_modules
+    from anihub.common.extractors import get_extractor_modules
 
     return Choice(get_extractor_modules())
 
@@ -41,7 +41,7 @@ def version():
     from .common.updater import get_api_version
 
     api_version = get_api_version()
-    renderable = f"anihub : [bold]{anicli.__version__}[/bold]\nanicli-api: [bold]{api_version}[/bold]"
+    renderable = f"anihub : [bold]{anihub.__version__}[/bold]\nanicli-api: [bold]{api_version}[/bold]"
     panel = Panel(renderable, title="Versions", expand=False)
     console.print(panel)
 
@@ -58,7 +58,7 @@ def update(
 
     from .common import updater
 
-    current = anicli.__version__
+    current = anihub.__version__
     try:
         release = updater.fetch_latest_release()
     except updater.UpdateExceptionError as e:
@@ -259,7 +259,7 @@ def tui(
         msg = "Not allowed pass both `--search` and `--ongoing` options. Pick once option"
         raise BadParameter(msg)
 
-    from .tui import AnicliApp, Session, Settings
+    from .tui import AnihubApp, Session, Settings
     from .tui.app import EXIT_UPDATE
 
     headers = parse_args_headers(header) if header else {}
@@ -291,7 +291,7 @@ def tui(
         headers=headers,
         cookies=cookies,
     )
-    if AnicliApp(Session(settings), query=search, ongoing=ongoing).run() == EXIT_UPDATE:
+    if AnihubApp(Session(settings), query=search, ongoing=ongoing).run() == EXIT_UPDATE:
         # confirmed in the app (F9): the terminal is free for the installer output now
         update(force=False, yes=True)
 

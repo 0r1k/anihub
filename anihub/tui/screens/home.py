@@ -14,9 +14,9 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, OptionList, Select, TabbedContent, TabPane, Tabs
 
-from anicli.common import history, mal_links, ongoing_state
-from anicli.common.mal import STATUSES, MalAnime, MalError
-from anicli.common.mal_feed import RELATIONS, RETRY_AFTER, Feed, FeedItem
+from anihub.common import history, mal_links, ongoing_state
+from anihub.common.mal import STATUSES, MalAnime, MalError
+from anihub.common.mal_feed import RELATIONS, RETRY_AFTER, Feed, FeedItem
 
 from .. import mal, ongoing, playback, watching
 from ..i18n import localized_bindings, t
@@ -26,7 +26,7 @@ from .dialogs import ConfirmScreen
 from .profile import ProfileScreen
 
 if TYPE_CHECKING:
-    from ..app import AnicliApp
+    from ..app import AnihubApp
 
 
 HistoryItem = tuple[dict[str, Any], Any]
@@ -143,7 +143,7 @@ def _mal_label(anime: MalAnime, with_status: bool, link: dict[str, Any] | None) 
 
 @localized_bindings
 class HomeScreen(Screen[None]):
-    app: AnicliApp
+    app: AnihubApp
     BINDINGS = [
         Binding("slash", "show_tab('search')", "Search"),
         Binding("o", "show_tab('ongoing')", "Ongoing"),

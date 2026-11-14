@@ -23,15 +23,15 @@ import httpx  # noqa: E402
 from anicli_api.player.base import Video  # noqa: E402
 from textual.widgets import Checkbox  # noqa: E402
 
-from anicli.common.config import get_config_dir, get_data_dir  # noqa: E402
-from anicli.common.episodes import leaked_numbers  # noqa: E402
-from anicli.common.extractors import dynamic_load_extractor_module, get_extractor_modules  # noqa: E402
-from anicli.common.mal_profile import parse_friends, parse_profile  # noqa: E402
-from anicli.common.players.base import split_args, split_command  # noqa: E402
-from anicli.common.stream_proxy import StreamProxy  # noqa: E402
-from anicli.tui import AnicliApp, Session, Settings  # noqa: E402
-from anicli.tui.screens.settings import SettingsScreen  # noqa: E402
-from anicli.tui.subtitles import _Wanted  # noqa: E402
+from anihub.common.config import APP_NAME, OLD_APP_NAME, _get_base_dir, get_config_dir, get_data_dir  # noqa: E402
+from anihub.common.episodes import leaked_numbers  # noqa: E402
+from anihub.common.extractors import dynamic_load_extractor_module, get_extractor_modules  # noqa: E402
+from anihub.common.mal_profile import parse_friends, parse_profile  # noqa: E402
+from anihub.common.players.base import split_args, split_command  # noqa: E402
+from anihub.common.stream_proxy import StreamProxy  # noqa: E402
+from anihub.tui import AnihubApp, Session, Settings  # noqa: E402
+from anihub.tui.screens.settings import SettingsScreen  # noqa: E402
+from anihub.tui.subtitles import _Wanted  # noqa: E402
 
 
 def check_extractors() -> None:
@@ -49,6 +49,27 @@ def check_paths() -> None:
         probe = Path(path) / "probe.json"
         probe.write_text('{"ok": "тест"}', encoding="utf-8")
         assert probe.read_text(encoding="utf-8") == '{"ok": "тест"}'
+    # the directory of the old name moves to the new one with its files
+    base = Path(tempfile.mkdtemp(prefix="anihub-move-"))
+    (base / OLD_APP_NAME).mkdir()
+    (base / OLD_APP_NAME / "history.json").write_text("[1]", encoding="utf-8")
+    moved = _get_base_dir("", base)
+    assert moved == base / APP_NAME and (moved / "history.json").read_text(encoding="utf-8") == "[1]", moved
+    assert not (base / OLD_APP_NAME).exists() and _get_base_dir("", base) == moved
+    # a busy directory (Windows: a file open in another anihub) stays in use until exit, even if freed meanwhile
+    busy = Path(tempfile.mkdtemp(prefix="anihub-busy-"))
+    (busy / OLD_APP_NAME).mkdir()
+    rename = Path.rename
+
+    def refuse(self: Path, _target: Path) -> Path:
+        raise PermissionError(self)
+
+    Path.rename = refuse  # type: ignore[method-assign]
+    try:
+        assert _get_base_dir("", busy) == busy / OLD_APP_NAME
+    finally:
+        Path.rename = rename  # type: ignore[method-assign]
+    assert _get_base_dir("", busy) == busy / OLD_APP_NAME and not (busy / APP_NAME).exists()
     print(f"paths ok: {get_config_dir()} | {get_data_dir()}")
 
 
@@ -140,25 +161,40 @@ def check_mal_profile() -> None:
 
 
 async def check_stream_proxy() -> None:
-    """The proxy rewrites playlists, passes headers and ranges, resumes a body broken by the hosting."""
+    """The proxy rewrites playlists, passes headers and ranges, resumes a body broken by the hosting.
+
+    A resume that does not continue the body (an error page, another file) never gets into the video.
+    """
     segment = bytes(range(256)) * 400
     requests: list[dict[str, str]] = []
+    broken = {1, 4}  # request numbers of the downloads that break in the middle
+    error_page, other_file = 5, 6  # wrong answers to the resume of the second broken download
 
     async def hosting(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         lines = (await reader.readuntil(b"\r\n\r\n")).decode().split("\r\n")
         path = lines[0].split(" ")[1]
         headers = {k.lower(): v.strip() for k, _, v in (line.partition(":") for line in lines[1:] if line)}
+        number = len(requests)
         requests.append({"path": path, **headers})
         if path == "/v/index.m3u8":
             body = b'#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:6.0,\nseg-1.ts\n#EXT-X-ENDLIST\n'
             writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%b" % (len(body), body))
+        elif number == error_page:
+            body = b"<html>error</html>" * 2000
+            writer.write(b"HTTP/1.1 503 Busy\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%b" % (len(body), body))
         else:
             start = int(headers.get("range", "bytes=0-")[6:].split("-")[0])
-            body = segment[start:]
-            status = b"206 Partial Content" if start else b"200 OK"
-            writer.write(b"HTTP/1.1 %b\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % (status, len(body)))
-            # the first download breaks in the middle
-            writer.write(body[: len(body) // 2] if len(requests) == 2 else body)
+            data = segment + b"x" if number == other_file else segment
+            body = data[start:]
+            head = b"HTTP/1.1 200 OK\r\n"
+            if start:
+                head = b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes %d-%d/%d\r\n" % (
+                    start,
+                    len(data) - 1,
+                    len(data),
+                )
+            writer.write(head + b"Content-Length: %d\r\nConnection: close\r\n\r\n" % len(body))
+            writer.write(body[: len(body) // 2] if number in broken else body)
         await writer.drain()
         writer.close()
 
@@ -177,7 +213,10 @@ async def check_stream_proxy() -> None:
             assert (await client.get(uris[0])).content == segment
             response = await client.get(uris[0], headers={"Range": "bytes=1000-"})
             assert response.status_code == 206 and response.content == segment[1000:], response
+            # broken again, the hosting answers the resume with an error page, then with another file
+            assert (await client.get(uris[0])).content == segment
         assert requests[2].get("range") == f"bytes={len(segment) // 2}-", requests
+        assert len(requests) == 8 and requests[7].get("range") == f"bytes={len(segment) // 2}-", requests
         assert all(r.get("referer") == "r" for r in requests), requests
     finally:
         await proxy.aclose()
@@ -192,7 +231,7 @@ async def check_tui() -> None:
         return []
 
     session.extractor.a_ongoing = no_ongoing  # type: ignore[method-assign]
-    app = AnicliApp(session)
+    app = AnihubApp(session)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         home = app.screen

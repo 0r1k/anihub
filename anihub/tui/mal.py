@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 
-from anicli.common import mal_links
-from anicli.common.mal import SCORE_LABELS, STATUS_LABELS, MalAnime
+from anihub.common import mal_links
+from anihub.common.mal import SCORE_LABELS, STATUS_LABELS, MalAnime
 
 from .i18n import t
 

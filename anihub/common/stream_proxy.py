@@ -64,6 +64,44 @@ def _range_end(value: str | None) -> str:
     return match[2] if match else ""
 
 
+def _content_range(value: str | None) -> tuple[int, int | None] | None:
+    """`bytes 100-199/1000` -> (100, 1000); `bytes 100-199/*` -> (100, None); anything else -> None."""
+    match = re.fullmatch(r"\s*bytes\s+(\d+)-\d+/(\d+|\*)\s*", value or "")
+    if not match:
+        return None
+    return int(match[1]), None if match[2] == "*" else int(match[2])
+
+
+def _file_size(response: httpx.Response) -> int | None:
+    """Size of the whole file on the hosting, if the response tells it."""
+    if response.status_code == httpx.codes.PARTIAL_CONTENT:
+        content_range = _content_range(response.headers.get("content-range"))
+        return content_range[1] if content_range else None
+    if response.status_code == httpx.codes.OK and "content-length" in response.headers:
+        return int(response.headers["content-length"])
+    return None
+
+
+def _resume_skip(response: httpx.Response, offset: int, size: int | None) -> int | None:
+    """Bytes to drop from a resumed download so that it continues at `offset` of the file.
+
+    None: the response cannot continue the body given to the player (an error page, a range after
+    the offset, another file), it must not get into the video.
+    """
+    if size is not None and (new_size := _file_size(response)) is not None and new_size != size:
+        return None
+    if response.status_code == httpx.codes.OK:
+        # the hosting ignored the range and sends the file from the start
+        return offset
+    if response.status_code != httpx.codes.PARTIAL_CONTENT:
+        return None
+    content_range = _content_range(response.headers.get("content-range"))
+    if content_range is None:
+        return 0  # no Content-Range: trust that the requested range came
+    start = content_range[0]
+    return offset - start if start <= offset else None
+
+
 class StreamProxy:
     def __init__(self) -> None:
         self.port = 0
@@ -211,10 +249,15 @@ class StreamProxy:
         sent = 0  # body bytes given to the player
         started = False  # the status line is sent: a retry continues the body
         length: int | None = None
+        size: int | None = None  # of the whole file: a resume from another file is refused
+        body_start = _range_start(wanted_range)  # file position of the first byte given to the player
 
         for attempt in range(ATTEMPTS):
-            if started and sent:
-                request_headers["range"] = f"bytes={_range_start(wanted_range) + sent}-{_range_end(wanted_range)}"
+            offset = body_start + sent  # file position the body continues from
+            if started:
+                if sent:
+                    request_headers["range"] = f"bytes={offset}-{_range_end(wanted_range)}"
+                logger.info("stream proxy: resume %s at byte %s (attempt %s)", url, offset, attempt + 1)
             try:
                 async with self._client.stream("GET", url, headers=request_headers) as response:
                     if not started:
@@ -236,6 +279,11 @@ class StreamProxy:
                         }
                         if "content-length" in response.headers:
                             length = int(response.headers["content-length"])
+                        size = _file_size(response) if response.is_success else None
+                        if response.status_code == httpx.codes.OK:
+                            body_start = 0  # the range is ignored: the whole file comes
+                        elif content_range := _content_range(response.headers.get("content-range")):
+                            body_start = content_range[0]
                         await self._send_head(
                             writer, response.status_code, response.reason_phrase, reply, keep_alive=length is not None
                         )
@@ -244,9 +292,19 @@ class StreamProxy:
                             return True
                         skip = 0
                     else:
-                        # the hosting ignored the range: drop what the player already has
-                        partial = response.status_code == httpx.codes.PARTIAL_CONTENT
-                        skip = 0 if partial else _range_start(wanted_range) + sent
+                        resume_skip = _resume_skip(response, offset, size)
+                        if resume_skip is None:
+                            logger.warning(
+                                "stream proxy: resume of %s at byte %s refused: %s, Content-Range %s, length %s",
+                                url,
+                                offset,
+                                response.status_code,
+                                response.headers.get("content-range"),
+                                response.headers.get("content-length"),
+                            )
+                            await asyncio.sleep(1)
+                            continue
+                        skip = resume_skip
                     async for chunk in response.aiter_raw():
                         data = chunk[skip:]
                         skip = max(0, skip - len(chunk))
@@ -255,12 +313,15 @@ class StreamProxy:
                             sent += len(data)
                     if length is None or sent >= length:
                         return length is not None
+                    logger.info("stream proxy: %s ended at %s of %s bytes", url, sent, length)
             except httpx.TransportError as e:
                 # lost connection attempt, a stalled or broken download: try again on another connection
                 logger.info("stream proxy: %s on %s (attempt %s)", type(e).__name__, url, attempt + 1)
                 continue
         if not started:
             return await self._send_error(writer, 504, "Gateway Timeout")
+        # the player sees a short body and requests the rest itself
+        logger.warning("stream proxy: gave up %s at %s of %s bytes", url, sent, length)
         return False
 
     async def _send_playlist(self, writer: StreamWriter, method: str, text: str, content_type: str) -> bool:

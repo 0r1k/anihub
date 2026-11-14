@@ -15,8 +15,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, Header, OptionList, Select, Static
 
-from anicli.common import mal_profile
-from anicli.common.mal import STATUSES, MalAnime, MalError
+from anihub.common import mal_profile
+from anihub.common.mal import STATUSES, MalAnime, MalError
 
 from .. import mal, posters
 from ..i18n import localized_bindings, t
@@ -24,9 +24,9 @@ from ..widgets import FilterSelect, ItemList, Navigate, PlayerBar, stop_loading
 from .mal_dialogs import UserNameScreen
 
 if TYPE_CHECKING:
-    from anicli.common.mal_profile import Favorite, Friend, Profile, Stats, Update
+    from anihub.common.mal_profile import Favorite, Friend, Profile, Stats, Update
 
-    from ..app import AnicliApp
+    from ..app import AnihubApp
 
 # MAL site colors of the list statuses (manga: reading, plan to read)
 STATUS_COLORS = {
@@ -113,7 +113,7 @@ def _friend_label(friend: Friend) -> Text:
 class _AnimeActions:
     """Open a MAL title by id and add it to Plan to Watch: shared by the profile and the user list."""
 
-    app: AnicliApp
+    app: AnihubApp
 
     @work(group="mal-open", exclusive=True)
     async def open_anime(self, anime_id: int) -> None:
@@ -149,7 +149,7 @@ class _AnimeActions:
 class ProfileScreen(_AnimeActions, Screen[None]):
     """A MAL profile like on the site: avatar, statistics, last updates, favorites, friends."""
 
-    app: AnicliApp
+    app: AnihubApp
     BINDINGS = [
         Binding("escape", "back", "Back"),
         Binding("l", "anime_list", "Anime list"),
@@ -325,7 +325,7 @@ def _user_entry_label(anime: MalAnime) -> Text:
 class UserListScreen(_AnimeActions, Screen[None]):
     """Another user's anime list: their status, episodes and score, and whether the title is in yours."""
 
-    app: AnicliApp
+    app: AnihubApp
     BINDINGS = [
         Binding("escape", "back", "Back"),
         Binding("a", "plan_to_watch", "To Plan to Watch"),

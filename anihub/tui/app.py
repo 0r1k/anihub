@@ -11,10 +11,10 @@ from textual.binding import Binding
 from textual.reactive import reactive
 from textual.theme import Theme
 
-import anicli
-from anicli.common import mal_links
-from anicli.common.mal import MalAnime, MalAuthError, MalError
-from anicli.common.players import is_installed
+import anihub
+from anihub.common import mal_links
+from anihub.common.mal import MalAnime, MalAuthError, MalError
+from anihub.common.players import is_installed
 
 from . import logs, mal
 from .i18n import localized_bindings, set_language, t
@@ -26,12 +26,12 @@ from .screens.mal_dialogs import ScoreScreen
 from .screens.settings import SettingsScreen
 from .session import Session
 
-# `AnicliApp.run()` result: the user chose to update anihub, the terminal runs the update after the app exits
+# `AnihubApp.run()` result: the user chose to update anihub, the terminal runs the update after the app exits
 EXIT_UPDATE = "update"
 
 
 @localized_bindings
-class AnicliApp(App[str | None]):
+class AnihubApp(App[str | None]):
     CSS_PATH = "app.tcss"
     TITLE = "anihub"
     BINDINGS = [
@@ -253,11 +253,11 @@ class AnicliApp(App[str | None]):
 
     @work(exit_on_error=False)
     async def check_updates(self) -> None:
-        from anicli.common.updater import check_for_updates
+        from anihub.common.updater import check_for_updates
 
         result = await check_for_updates()
-        if result["anicli_ru"]["is_outdated"]:
-            self._new_version = result["anicli_ru"]["latest_version"]
+        if result["anihub"]["is_outdated"]:
+            self._new_version = result["anihub"]["latest_version"]
             self.refresh_bindings()
         outdated = [
             f"{info['package_name']} {info['current_version']} → {info['latest_version']}"
@@ -280,7 +280,7 @@ class AnicliApp(App[str | None]):
             return
         question = t(
             "Update anihub {current} → {latest}? anihub will close and the update will run in the terminal.",
-            current=anicli.__version__,
+            current=anihub.__version__,
             latest=self._new_version,
         )
 

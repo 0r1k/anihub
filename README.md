@@ -236,7 +236,7 @@ anihub веде ваш список на [MyAnimeList](https://myanimelist.net) 
 | `anitube` 🇺🇦 | українська | [anitube.in.ua](https://anitube.in.ua): озвучення й субтитри, варіанти підписано «Озвучення &lt;команда&gt;» / «Субтитри &lt;команда&gt;». Плеєри: fenixplay.xyz, moonanime.art, ashdi.vip, mp4upload — робочі йдуть першими. Частина плеєрів буває недоступна (ashdi сам сайт позначає тимчасово неробочим, moonanime і mp4upload блокуються в деяких мережах) — тоді оберіть інший плеєр або ввімкніть проксі в `F2` |
 | `animego` (за замовчуванням), `yummy-anime`, `anilibria`, `animevost`, `dreamcast`, `hdrezka`, `sameband`, `anilibme` | російська | парсери з бібліотеки [anicli-api](https://github.com/vypivshiy/anicli-api) |
 
-Якщо сайт закритий у вашій мережі, допомагає проксі: `F2` → «Проксі» або `--proxy socks5://user:password@host:port`.
+Якщо сайт закритий у вашій мережі, допомагає проксі: `F2` → «Проксі для сайтів» або `--proxy socks5://user:password@host:port`.
 
 ## Налаштування й дані
 
@@ -244,8 +244,8 @@ anihub веде ваш список на [MyAnimeList](https://myanimelist.net) 
 
 | | Linux | macOS | Windows |
 |---|---|---|---|
-| налаштування | `~/.config/anicliru/` | `~/Library/Application Support/anicliru/` | `%APPDATA%\anicliru\` |
-| дані | `~/.local/share/anicliru/` | `~/Library/Application Support/anicliru/` | `%APPDATA%\anicliru\` |
+| налаштування | `~/.config/anihub/` | `~/Library/Application Support/anihub/` | `%APPDATA%\anihub\` |
+| дані | `~/.local/share/anihub/` | `~/Library/Application Support/anihub/` | `%APPDATA%\anihub\` |
 
 У Linux враховуються `$XDG_CONFIG_HOME` і `$XDG_DATA_HOME`.
 
@@ -295,9 +295,9 @@ uv build                    # зібрати wheel і sdist у dist/
 uv run python tests/smoke_test.py
 ```
 
-- [anicli/tui/](anicli/tui/) — інтерфейс
-- [anicli/common/](anicli/common/) — MyAnimeList, історія, плеєри, оновлення
-- [anicli/extractors/](anicli/extractors/) — власні парсери сайтів (`anitube`); інші джерела беруться з [anicli-api](https://github.com/vypivshiy/anicli-api)
+- [anihub/tui/](anihub/tui/) — інтерфейс
+- [anihub/common/](anihub/common/) — MyAnimeList, історія, плеєри, оновлення
+- [anihub/extractors/](anihub/extractors/) — власні парсери сайтів (`anitube`); інші джерела беруться з [anicli-api](https://github.com/vypivshiy/anicli-api)
 
 Пакет — чистий Python (`py3-none-any`): одна збірка працює на всіх ОС. CI ([build.yml](.github/workflows/build.yml)) на кожен пуш збирає його на Linux, macOS і Windows з Python 3.10, 3.12 і 3.14, встановлює через `uv tool install` і проганяє офлайн smoke-тест інтерфейсу ([tests/smoke_test.py](tests/smoke_test.py)).
 

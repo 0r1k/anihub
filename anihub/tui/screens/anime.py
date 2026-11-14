@@ -15,10 +15,10 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, OptionList, Select, Static
 from textual.widgets.selection_list import Selection
 
-from anicli.common import mal_links
-from anicli.common.episodes import split_leaked
-from anicli.common.extractors import dynamic_load_extractor_module
-from anicli.common.mal import STATUSES, MalAnime, MalError
+from anihub.common import mal_links
+from anihub.common.episodes import split_leaked
+from anihub.common.extractors import dynamic_load_extractor_module
+from anihub.common.mal import STATUSES, MalAnime, MalError
 
 from .. import mal, playback, posters, subtitles
 from ..i18n import localized_bindings, t
@@ -31,7 +31,7 @@ from .sites import SitesScreen
 if TYPE_CHECKING:
     from anicli_api.base import BaseAnime, BaseEpisode, BaseSource
 
-    from ..app import AnicliApp
+    from ..app import AnihubApp
 
 # the quality column: parallel requests to the players and the wait for one of them
 QUALITY_CONCURRENCY = 4
@@ -44,7 +44,7 @@ MAL_ACTIONS = {"mal_status", "mal_score", "mal_episodes", "mal_remove"}
 class AnimeScreen(Screen[None]):
     """Title page: pick episode(s), then dubber/player, then play."""
 
-    app: AnicliApp
+    app: AnihubApp
     BINDINGS = [
         Binding("escape", "back", "Back"),
         Binding("a", "select_all", "All episodes"),

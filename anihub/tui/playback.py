@@ -11,9 +11,9 @@ from urllib.parse import urlsplit
 
 from anicli_api.tools.helpers import get_video_by_quality
 
-from anicli.common import history
-from anicli.common.anicli_api_helpers import videos_iterator
-from anicli.common.players import PlayerNotFoundError, create_player
+from anihub.common import history
+from anihub.common.anicli_api_helpers import videos_iterator
+from anihub.common.players import PlayerNotFoundError, create_player
 
 from .i18n import t
 

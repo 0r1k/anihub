@@ -24,7 +24,7 @@ class ExtractorLikeModule(Protocol):
 
 
 # extractors of anihub itself go together with the anicli-api ones (a local name wins)
-LOCAL_PACKAGE = "anicli.extractors"
+LOCAL_PACKAGE = "anihub.extractors"
 API_PACKAGE = "anicli_api.source"
 
 

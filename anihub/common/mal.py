@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 import httpx
 
-from anicli.common.config import get_config_dir
+from anihub.common.config import get_config_dir
 
 logger = logging.getLogger(__name__)
 

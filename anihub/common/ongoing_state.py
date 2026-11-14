@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
-from anicli.common.config import get_data_dir
+from anihub.common.config import get_data_dir
 
 logger = logging.getLogger(__name__)
 # marks remembered per title: enough for a season of episodes in several dubs

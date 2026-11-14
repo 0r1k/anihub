@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 import attr
 
-from anicli.common.config import get_history_path
-from anicli.common.extractors import dynamic_load_extractor_module
+from anihub.common.config import get_history_path
+from anihub.common.extractors import dynamic_load_extractor_module
 
 if TYPE_CHECKING:
     from anicli_api.base import T_KW_HTTPS, BaseSource

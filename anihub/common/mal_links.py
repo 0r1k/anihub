@@ -14,14 +14,14 @@ from typing import TYPE_CHECKING, Any
 
 import attr
 
-from anicli.common.config import get_data_dir
-from anicli.common.history import restore_item, serialize_item
-from anicli.common.mal import ListStatus
+from anihub.common.config import get_data_dir
+from anihub.common.history import restore_item, serialize_item
+from anihub.common.mal import ListStatus
 
 if TYPE_CHECKING:
     from anicli_api.base import T_KW_HTTPS
 
-    from anicli.common.mal import MalAnime
+    from anihub.common.mal import MalAnime
 
 logger = logging.getLogger(__name__)
 LINKS_LIMIT = 2000

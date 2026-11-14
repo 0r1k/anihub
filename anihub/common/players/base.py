@@ -12,7 +12,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from anicli.common.m3u import generate_m3u_str_playlist
+from anihub.common.m3u import generate_m3u_str_playlist
 
 if TYPE_CHECKING:
     from anicli_api.player.base import Video

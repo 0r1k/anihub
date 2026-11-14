@@ -4,7 +4,7 @@ import platform
 from pathlib import Path
 
 # import toml
-from anicli.common.extractors import get_extractor_modules
+from anihub.common.extractors import get_extractor_modules
 
 # use raw string for initialize comments reason
 __DEFAULT_EXTRACTORS = ", ".join(get_extractor_modules())
@@ -30,7 +30,11 @@ proxy=''
 headers=[]
 """
 
-APP_NAME = "anicliru"
+APP_NAME = "anihub"
+# name of the directories before anihub 8.1: moved to the new name on the first start
+OLD_APP_NAME = "anicliru"
+# old directories that could not be moved: used until anihub exits, so all files stay together
+_not_moved: set[Path] = set()
 
 
 def _get_base_dir(env_var: str, default_path: Path) -> Path:
@@ -38,6 +42,16 @@ def _get_base_dir(env_var: str, default_path: Path) -> Path:
     base = os.getenv(env_var)
     path = Path(base) if base else default_path
     full_path = path / APP_NAME
+    old_path = path / OLD_APP_NAME
+    if old_path in _not_moved:
+        return old_path
+    if not full_path.exists() and old_path.is_dir():
+        try:
+            old_path.rename(full_path)
+        except OSError:
+            # busy (Windows: another running anihub keeps a file open): moved on the next start
+            _not_moved.add(old_path)
+            return old_path
     full_path.mkdir(parents=True, exist_ok=True)
     return full_path
 

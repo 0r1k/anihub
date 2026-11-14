@@ -11,11 +11,11 @@ from typing import TYPE_CHECKING, Any
 
 from anicli_api._http import HTTPAsync, HTTPSync
 
-from anicli.common.config import get_config_dir
-from anicli.common.extractors import dynamic_load_extractor_module, get_extractor_modules
-from anicli.common.mal import MalClient
-from anicli.common.players import PLAYERS, player_command
-from anicli.common.stream_proxy import StreamProxy
+from anihub.common.config import get_config_dir
+from anihub.common.extractors import dynamic_load_extractor_module, get_extractor_modules
+from anihub.common.mal import MalClient
+from anihub.common.players import PLAYERS, player_command
+from anihub.common.stream_proxy import StreamProxy
 
 from .i18n import DEFAULT_LANGUAGE, LANGUAGES
 
@@ -61,7 +61,7 @@ class Settings:
     m3u_size: int = 6
     timeout: float = 60
     proxy: str | None = None
-    # MyAnimeList API client id, see anicli.common.mal
+    # MyAnimeList API client id, see anihub.common.mal
     mal_client_id: str = ""
     # count watched episodes and change the status on MyAnimeList
     mal_auto_update: bool = True
@@ -73,9 +73,9 @@ class Settings:
     subtitles_first: bool = True
     # ongoing tab filter: all, airing, announced
     ongoing_filter: str = "airing"
-    # players load videos through anihub: see anicli.common.stream_proxy
+    # players load videos through anihub: see anihub.common.stream_proxy
     stream_proxy: bool = True
-    # episodes dubbed before their release (1-6 and 12): see anicli.common.episodes
+    # episodes dubbed before their release (1-6 and 12): see anihub.common.episodes
     show_leaked: bool = False
     headers: dict[str, str] = field(default_factory=dict)
     cookies: CookieJar | None = None

@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 
-from anicli.common import mal_links, ongoing_state
-from anicli.common.episodes import split_leaked
+from anihub.common import mal_links, ongoing_state
+from anihub.common.episodes import split_leaked
 
 from . import mal, ongoing
 from .i18n import t
@@ -24,7 +24,7 @@ from .i18n import t
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from anicli.common.mal import MalAnime
+    from anihub.common.mal import MalAnime
 
     from .session import Session
 
@@ -98,7 +98,7 @@ async def _available(item: Any) -> tuple[int, int]:
 async def check(entry: Entry, semaphore: asyncio.Semaphore, *, force: bool = False, show_leaked: bool = False) -> None:
     """Fill `entry.available` from the site of the link (cached for CACHE_TTL)."""
     key = (entry.extractor_name, entry.item.url)
-    # a title finished on MyAnimeList has nothing to leak: see anicli.common.episodes
+    # a title finished on MyAnimeList has nothing to leak: see anihub.common.episodes
     with_leaked = show_leaked or entry.anime.airing_status == "finished_airing"
     cached = _cache.get(key)
     if cached and not force and time.time() - cached[0] < CACHE_TTL:

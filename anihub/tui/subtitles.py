@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
-from anicli.common import mal_links
-from anicli.common.extractors import dynamic_load_extractor_module, get_extractor_modules
-from anicli.common.mal_links import normalize
+from anihub.common import mal_links
+from anihub.common.extractors import dynamic_load_extractor_module, get_extractor_modules
+from anihub.common.mal_links import normalize
 
 if TYPE_CHECKING:
     from anicli_api.base import BaseAnime, BaseEpisode, BaseSource

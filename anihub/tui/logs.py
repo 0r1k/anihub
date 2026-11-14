@@ -10,7 +10,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from anicli.common.config import get_data_dir
+from anihub.common.config import get_data_dir
 
 _FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _handler: RotatingFileHandler | None = None
@@ -35,5 +35,5 @@ def setup() -> Path:
             api.removeHandler(handler)
     # its records (INFO and up) propagate to the root file handler
     api.propagate = True
-    logging.getLogger("anicli").setLevel(logging.INFO)
+    logging.getLogger("anihub").setLevel(logging.INFO)
     return log_path()

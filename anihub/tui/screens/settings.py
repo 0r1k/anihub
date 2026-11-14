@@ -10,9 +10,9 @@ from textual.screen import ModalScreen
 from textual.validation import Function, Number
 from textual.widgets import Button, Checkbox, Input, Label, Select, Static
 
-from anicli.common.extractors import get_extractor_modules
-from anicli.common.players import PLAYERS
-from anicli.common.utils import validate_proxy_url
+from anihub.common.extractors import get_extractor_modules
+from anihub.common.players import PLAYERS
+from anihub.common.utils import validate_proxy_url
 
 from .. import posters
 from ..i18n import LANGUAGES, localized_bindings, t
@@ -20,7 +20,7 @@ from ..session import QUALITIES
 from .mal_dialogs import MalLoginScreen, client_id_help
 
 if TYPE_CHECKING:
-    from ..app import AnicliApp
+    from ..app import AnihubApp
 
 PLAYER_LABELS = {"mpv": "mpv", "vlc": "VLC", "custom": "Other (command)"}
 
@@ -61,7 +61,7 @@ class SettingsScreen(ModalScreen[set[str]]):
     the dialog dismisses with names of their groups: "language", "extractor", "network", "mal".
     """
 
-    app: AnicliApp
+    app: AnihubApp
     BINDINGS = [
         Binding("escape", "close", "Close"),
         Binding("up", "app.focus_previous", show=False),
@@ -115,10 +115,10 @@ class SettingsScreen(ModalScreen[set[str]]):
             )
             yield Label(t("Extra player arguments"))
             yield Input(s.player_args, placeholder="--fullscreen", id="player-args")
-            yield Checkbox(t("Load video through anihub (fast start, reconnects)"), s.stream_proxy, id="stream-proxy")
+            yield Checkbox(t("Local video proxy (reconnects on connection drops)"), s.stream_proxy, id="stream-proxy")
             yield Label(t("Episodes per player playlist"))
             yield Input(str(s.m3u_size), type="integer", validators=[Number(minimum=1, maximum=100)], id="m3u-size")
-            yield Label(t("Proxy"))
+            yield Label(t("Proxy for sites"))
             yield Input(
                 s.proxy or "",
                 placeholder="socks5://user:password@host:port",

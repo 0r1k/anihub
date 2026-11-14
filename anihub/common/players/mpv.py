@@ -12,8 +12,8 @@ from asyncio.streams import StreamReader, StreamWriter
 from pathlib import Path
 from typing import Any
 
-from anicli.common import history
-from anicli.common.sanitizer import sanitize_filename
+from anihub.common import history
+from anihub.common.sanitizer import sanitize_filename
 
 from .base import BasePlayer, split_args
 
@@ -43,7 +43,7 @@ class MpvIpcClient:
         if IS_WINDOWS:
             self.socket_path = rf"\\.\pipe\mpvserver_{os.getpid()}"
         else:
-            self.tmp_dir = Path(tempfile.mkdtemp(prefix="anicli_mpv_"))
+            self.tmp_dir = Path(tempfile.mkdtemp(prefix="anihub_mpv_"))
             self.socket_path = str(self.tmp_dir / "socket")
         return self
 

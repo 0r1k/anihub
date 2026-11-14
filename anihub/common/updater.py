@@ -21,7 +21,7 @@ from typing import Literal, TypedDict
 
 import httpx
 
-import anicli
+import anihub
 
 GITHUB_REPO = "0r1k/anihub"
 # a fork or a mirror can point the updater elsewhere
@@ -43,7 +43,7 @@ class TPACKAGE(TypedDict):
 
 
 class TVERSION(TypedDict):
-    anicli_ru: TPACKAGE
+    anihub: TPACKAGE
     anicli_api: TPACKAGE
 
 
@@ -126,7 +126,7 @@ def fetch_latest_release(timeout: float = 15) -> Release | None:
 
 
 async def _github_package(client: httpx.AsyncClient) -> TPACKAGE:
-    current = anicli.__version__
+    current = anihub.__version__
     try:
         resp = await client.get(RELEASES_API, headers={"Accept": "application/vnd.github+json"})
         release = _release_from_response(resp)
@@ -161,10 +161,10 @@ async def get_package_version_from_pypi(package_name: str, current_version: str)
 async def check_for_updates() -> TVERSION:
     """anihub (GitHub releases) and anicli-api (PyPI) versions."""
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        anihub, api = await asyncio.gather(
+        own, api = await asyncio.gather(
             _github_package(client), get_package_version_from_pypi("anicli-api", get_api_version())
         )
-    return {"anicli_ru": anihub, "anicli_api": api}
+    return {"anihub": own, "anicli_api": api}
 
 
 # --- installation --------------------------------------------------------------

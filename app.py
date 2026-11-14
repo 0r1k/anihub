@@ -1,4 +1,4 @@
-from anicli.main import main
+from anihub.main import main
 
 if __name__ == "__main__":
     main()

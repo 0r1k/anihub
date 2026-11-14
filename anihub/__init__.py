@@ -1,4 +1,4 @@
-"""AniCli - Anime CLI and Web Interface"""
+"""anihub: TUI for watching anime with russian and ukrainian dubbing or subtitles."""
 
 from importlib.metadata import PackageNotFoundError, version
 
@@ -10,6 +10,6 @@ except PackageNotFoundError:  # running from source without installing
 
 def run_cli():
     """Entry point for CLI application"""
-    from anicli.main import main  # noqa
+    from anihub.main import main  # noqa
 
     main()

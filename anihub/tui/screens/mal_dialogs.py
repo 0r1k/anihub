@@ -15,7 +15,7 @@ from textual.validation import Number
 from textual.widgets import Button, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
-from anicli.common.mal import (
+from anihub.common.mal import (
     APICONFIG_URL,
     REDIRECT_URI,
     SCORE_LABELS,
@@ -30,7 +30,7 @@ from ..mal import describe, score_label
 from ..widgets import ItemList, Navigate, stop_loading
 
 if TYPE_CHECKING:
-    from ..app import AnicliApp
+    from ..app import AnihubApp
 
 
 @localized_bindings
@@ -141,7 +141,7 @@ class UserNameScreen(ModalScreen[str | None]):
 class MalSearchScreen(ModalScreen[MalAnime | None]):
     """Choose the MAL entry of the title manually."""
 
-    app: AnicliApp
+    app: AnihubApp
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, queries: list[str]) -> None:
@@ -221,7 +221,7 @@ class MalLoginScreen(ModalScreen[str | None]):
     Dismisses with the user name, None on cancel.
     """
 
-    app: AnicliApp
+    app: AnihubApp
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self) -> None:
