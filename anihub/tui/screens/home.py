@@ -407,7 +407,7 @@ class HomeScreen(Screen[None]):
         self._ongoing_loaded = True
         self._ongoing_updated = ongoing_state.track(self.app.session.settings.extractor_name, items, ongoing.mark)
         # titles with new episodes on top, the rest in the site order (sorted() is stable)
-        self._ongoing = sorted(items, key=lambda i: -self._ongoing_updated.get(i.url, 0))
+        self._ongoing = sorted(items, key=lambda i: -self._ongoing_updated.get(history.item_key(i), 0))
         self._show_ongoing()
         self.focus_loaded("ongoing")
 
@@ -423,7 +423,8 @@ class HomeScreen(Screen[None]):
         if self._ongoing:
             results.empty_text = t("No titles with this status")
         now = time.time()
-        results.set_items(items, [ongoing.label(i, self._ongoing_updated.get(i.url, 0), now) for i in items])
+        updated = self._ongoing_updated
+        results.set_items(items, [ongoing.label(i, updated.get(history.item_key(i), 0), now) for i in items])
         if highlighted in items:
             results.highlighted = items.index(highlighted)
         counts = {status: sum(ongoing.status(i) == status for i in self._ongoing) for status in ongoing.FILTERS[1:]}
@@ -743,13 +744,13 @@ class HomeScreen(Screen[None]):
 
         def open_title(resume: bool | None) -> None:
             if resume:
-                url = entry["data"]["url"]
+                key = history.entry_key(entry)
                 self.app.play(
                     playback.resume(
                         self.app.session,
                         entry,
-                        on_watched=self.app.mal_tracker(entry["extractor_name"], url),
-                        confirm_watched=self.app.mal_confirm_watched(entry["extractor_name"], url),
+                        on_watched=self.app.mal_tracker(entry["extractor_name"], key),
+                        confirm_watched=self.app.mal_confirm_watched(entry["extractor_name"], key),
                     ),
                     f"▶ {entry['episode']}",
                 )

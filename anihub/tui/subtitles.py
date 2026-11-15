@@ -29,11 +29,12 @@ logger = logging.getLogger(__name__)
 
 _SUBTITLES = re.compile(r"субтитр|subtitle|\bsub|sub\b|оригинал", re.IGNORECASE)
 _BRACKETS = re.compile(r"\[[^\]]*\]")
-# seasons are written in many ways: "[ТВ-2]", "2 сезон", "Сезон 2", "(второй сезон)", "2nd Season"
+# seasons are written in many ways: "[ТВ-2]", "2 сезон", "Сезон 2", "(второй сезон)", "2nd Season", "Durarara!!x2"
 _SEASON = re.compile(
     r"\b(?:тв|tv)-?\s*(\d+)\b"
     r"|\b(\d+)(?:-?(?:й|ой|st|nd|rd|th))?\s+(?:сезон|season)\w*"
     r"|\b(?:сезон|season)\w*\s+(\d+)\b"
+    r"|(?<![^\W\d_])[x×](\d+)\b"
 )
 _ORDINAL_SEASON = re.compile(r"\b(перв|перш|втор|друг|трет|четв|п'?ят|шест|шост)\w*\s+сезон\w*")
 _ORDINALS = {
@@ -130,6 +131,10 @@ def _numbers(words: set[str]) -> set[str]:
     return {w for w in words if w.isdigit()}
 
 
+def _first_word(title: str) -> str:
+    return next(iter(re.findall(r"\w+", title.casefold().replace("ё", "е"))), "")
+
+
 @dataclass
 class _Wanted:
     """What the title is known as."""
@@ -140,6 +145,8 @@ class _Wanted:
     numbers: set[str]
     exact: set[str] = field(default_factory=set)
     words: list[set[str]] = field(default_factory=list)
+    # the title each of `words` is made of
+    _word_titles: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         titles, self.titles = self.titles, []
@@ -151,6 +158,7 @@ class _Wanted:
             self.exact |= {normalize(title)} - {""}
             if (words := _words(title)) and words not in self.words:
                 self.words.append(words)
+                self._word_titles.append(title)
 
     def is_exact(self, title: str) -> bool:
         return bool(_variants(title) & self.exact) or any(_words(part) in self.words for part in title.split(" / "))
@@ -159,14 +167,18 @@ class _Wanted:
         """One name contains all words of the other and the numbers (season, part) are the same.
 
         "Научное доказательство любви 2" ~ "Влюблённые учёные и научное доказательство любви 2", not the first season.
+        A one-word name is too vague ("Любви 2") unless both names start with it: "Дюрарара!! x2" ~ "Дюрарара!! 2:
+        Наследие".
         """
         for part in title.split(" / "):
             words = _words(part)
-            for known in self.words:
+            for known, known_title in zip(self.words, self._word_titles, strict=True):
                 short, long = sorted((words, known), key=len)
+                named = short - _numbers(short)
+                same_start = len(named) == 1 and _first_word(part) == _first_word(known_title) in named
                 if (
                     _numbers(words) == _numbers(known)
-                    and len(short - _numbers(short)) >= _SIMILAR_MIN_WORDS
+                    and (len(named) >= _SIMILAR_MIN_WORDS or same_start)
                     and short <= long
                 ):
                     return True

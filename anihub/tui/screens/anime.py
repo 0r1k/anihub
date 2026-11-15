@@ -15,7 +15,7 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, OptionList, Select, Static
 from textual.widgets.selection_list import Selection
 
-from anihub.common import mal_links
+from anihub.common import history, mal_links
 from anihub.common.episodes import split_leaked
 from anihub.common.extractors import dynamic_load_extractor_module
 from anihub.common.mal import STATUSES, MalAnime, MalError
@@ -345,8 +345,8 @@ class AnimeScreen(Screen[None]):
         source = self._plain_source(choice)
         app, session = self.app, self.app.session
         # MAL progress belongs to this page's title whatever site plays it
-        on_watched = app.mal_tracker(self.extractor_name, self.item.url)
-        confirm_watched = app.mal_confirm_watched(self.extractor_name, self.item.url)
+        on_watched = app.mal_tracker(self.extractor_name, history.item_key(self.item))
+        confirm_watched = app.mal_confirm_watched(self.extractor_name, history.item_key(self.item))
 
         def on_play(titles: Sequence[str]) -> None:
             app.player_status = f"▶ {titles[0]} … {titles[-1]}" if len(titles) > 1 else f"▶ {titles[0]}"
@@ -698,8 +698,9 @@ class AnimeScreen(Screen[None]):
         self.set_mal(anime)
         self.notify(t("«{title}» removed from your MyAnimeList", title=anime.title), markup=False)
 
-    def matches(self, extractor_name: str, url: str) -> bool:
-        return self.extractor_name == extractor_name and self.item.url == url
+    def matches(self, extractor_name: str, key: str) -> bool:
+        """The page of the title with this `history.item_key`."""
+        return self.extractor_name == extractor_name and history.item_key(self.item) == key
 
     # --- the title on other sites ---------------------------------------------
 

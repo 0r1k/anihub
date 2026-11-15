@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from anihub.common.config import get_data_dir
+from anihub.common.history import item_key
 
 logger = logging.getLogger(__name__)
 # marks remembered per title: enough for a season of episodes in several dubs
@@ -48,7 +49,7 @@ def _write(data: dict[str, Any]) -> None:
 def track(
     extractor_name: str, items: Iterable[Any], mark: Callable[[Any], str], now: float | None = None
 ) -> dict[str, float]:
-    """Update the saved state with the loaded list. Returns `updated_at` by item url (0: no new release seen)."""
+    """Update the saved state with the loaded list. Returns `updated_at` by `item_key` (0: no new release seen)."""
     now = time.time() if now is None else now
     data = _read()
     site = data.get(extractor_name)
@@ -56,7 +57,7 @@ def track(
     titles: dict[str, Any] = {} if first_load else site.get("titles", {})  # type: ignore[union-attr]
 
     for item in items:
-        entry = titles.setdefault(item.url, {"seen": [], "updated_at": 0.0})
+        entry = titles.setdefault(item_key(item), {"seen": [], "updated_at": 0.0})
         entry["title"] = item.title
         entry["last_seen"] = now
         item_mark = mark(item)

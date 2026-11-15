@@ -7,10 +7,13 @@ No network: the ongoing loader is replaced, MyAnimeList is not logged in, the vi
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import socket
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # keep the user (runner) config untouched: every OS reads its own variable
 _tmp = tempfile.mkdtemp(prefix="anihub-smoke-")
@@ -23,9 +26,11 @@ import httpx  # noqa: E402
 from anicli_api.player.base import Video  # noqa: E402
 from textual.widgets import Checkbox  # noqa: E402
 
+from anihub.common import stream_proxy  # noqa: E402
 from anihub.common.config import APP_NAME, OLD_APP_NAME, _get_base_dir, get_config_dir, get_data_dir  # noqa: E402
 from anihub.common.episodes import leaked_numbers  # noqa: E402
 from anihub.common.extractors import dynamic_load_extractor_module, get_extractor_modules  # noqa: E402
+from anihub.common.history import entry_key, item_key, serialize_item  # noqa: E402
 from anihub.common.mal_profile import parse_friends, parse_profile  # noqa: E402
 from anihub.common.players.base import split_args, split_command  # noqa: E402
 from anihub.common.stream_proxy import StreamProxy  # noqa: E402
@@ -73,6 +78,17 @@ def check_paths() -> None:
     print(f"paths ok: {get_config_dir()} | {get_data_dir()}")
 
 
+def check_title_keys() -> None:
+    """anilibria and animevost give every title the url "_": titles are told apart by the site id."""
+    search = dynamic_load_extractor_module("anilibria").Search
+    drr, science = (search(title="", thumbnail="", url="_", data={"id": i}) for i in (395, 9168))
+    assert item_key(drr) != item_key(science)
+    assert entry_key(serialize_item(drr, "anilibria")) == item_key(drr)
+    site = dynamic_load_extractor_module("animego").Search(title="DRR", thumbnail="", url="/anime/drr-1")
+    assert item_key(site) == entry_key(serialize_item(site, "animego")) == "/anime/drr-1"
+    print("title keys ok")
+
+
 def check_commands() -> None:
     assert split_command("mpv --fs") == ["mpv", "--fs"]
     if os.name == "nt":
@@ -95,6 +111,10 @@ def check_title_matching() -> None:
         and seasons.is_exact("Наука закохалася 2")
         and seasons.is_exact("Mushoku Tensei 2")
     )
+    # a one-word name with the season matches only a name that starts with it
+    durarara = _Wanted(["Дюрарара!! 2: Наследие", "Durarara!!x2 Shou"], None, {"2"})
+    assert durarara.is_similar("Дюрарара!! x2") and durarara.is_similar("DURARARA!!×2")
+    assert not durarara.is_similar("Дюрарара!!") and not durarara.is_similar("Наследие 2")
     print("title matching ok")
 
 
@@ -224,6 +244,49 @@ async def check_stream_proxy() -> None:
     print("stream proxy ok")
 
 
+async def check_stream_proxy_idle() -> None:
+    """A download the player stopped reading is requested again from the next byte when it reads on."""
+    data = bytes(range(251)) * (24 * 1024 * 1024 // 251)  # more than the socket buffers hold
+    ranges: list[str] = []
+
+    async def hosting(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        lines = (await reader.readuntil(b"\r\n\r\n")).decode().split("\r\n")
+        wanted = next((line.split(":", 1)[1].strip() for line in lines if line.lower().startswith("range:")), "")
+        ranges.append(wanted)
+        start = int(wanted[6:].split("-")[0]) if wanted else 0
+        head = b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes %d-%d/%d\r\n" % (start, len(data) - 1, len(data))
+        with contextlib.suppress(ConnectionError):
+            writer.write(head + b"Content-Length: %d\r\n\r\n" % (len(data) - start) + data[start:])
+            await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(hosting, "127.0.0.1", 0)
+    proxy = StreamProxy()
+    idle_reconnect, stream_proxy.IDLE_RECONNECT = stream_proxy.IDLE_RECONNECT, 0.3
+    try:
+        hosting_url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/v.mp4"
+        (local,) = await proxy.wrap([Video(type="mp4", quality=720, url=hosting_url)])
+        sock = socket.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16384)
+        sock.connect(("127.0.0.1", proxy.port))
+        sock.setblocking(False)
+        reader, writer = await asyncio.open_connection(sock=sock)
+        writer.write(f"GET {urlsplit(local.url).path} HTTP/1.1\r\nHost: x\r\nRange: bytes=0-\r\n\r\n".encode())
+        head = await reader.readuntil(b"\r\n\r\n")
+        assert b" 206 " in head.split(b"\r\n")[0], head
+        body = await reader.readexactly(1024 * 1024)
+        await asyncio.sleep(1)  # paused player
+        body += await reader.readexactly(len(data) - len(body))
+        writer.close()
+        assert body == data
+        assert len(ranges) >= 2 and ranges[0] == "bytes=0-" and int(ranges[1][6:-1]) > 0, ranges
+    finally:
+        stream_proxy.IDLE_RECONNECT = idle_reconnect
+        await proxy.aclose()
+        server.close()
+    print("stream proxy idle reconnect ok")
+
+
 async def check_tui() -> None:
     session = Session(Settings(language="uk", posters=False))
 
@@ -258,9 +321,11 @@ def main() -> None:
     check_extractors()
     check_commands()
     check_title_matching()
+    check_title_keys()
     check_leaked_episodes()
     check_mal_profile()
     asyncio.run(check_stream_proxy())
+    asyncio.run(check_stream_proxy_idle())
     asyncio.run(check_tui())
 
 

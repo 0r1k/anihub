@@ -123,18 +123,18 @@ class AnihubApp(App[str | None]):
 
     # --- MyAnimeList ---------------------------------------------------------
 
-    def mal_tracker(self, extractor_name: str, url: str) -> OnWatched | None:
+    def mal_tracker(self, extractor_name: str, key: str) -> OnWatched | None:
         """Playback callback counting watched episodes of the title on MyAnimeList."""
         if not self.session.mal_tracking:
             return None
-        return lambda episode: self.mal_track(extractor_name, url, episode)
+        return lambda episode: self.mal_track(extractor_name, key, episode)
 
-    def mal_confirm_watched(self, extractor_name: str, url: str) -> ConfirmWatched | None:
+    def mal_confirm_watched(self, extractor_name: str, key: str) -> ConfirmWatched | None:
         if not self.session.mal_tracking:
             return None
 
         async def confirm(title: str) -> bool:
-            if mal_links.get_by_url(extractor_name, url) is None:
+            if mal_links.get_by_key(extractor_name, key) is None:
                 return False
             question = t("Mark «{title}» as watched on MyAnimeList?", title=title)
             return bool(await self.push_screen_wait(ConfirmScreen(question)))
@@ -142,8 +142,8 @@ class AnihubApp(App[str | None]):
         return confirm
 
     @work(group="mal-track", exit_on_error=False)
-    async def mal_track(self, extractor_name: str, url: str, episode: int) -> None:
-        link = mal_links.get_by_url(extractor_name, url)
+    async def mal_track(self, extractor_name: str, key: str, episode: int) -> None:
+        link = mal_links.get_by_key(extractor_name, key)
         if link is None:
             self.notify(
                 t("The episode is not counted on MyAnimeList: link the title first (l on the title page)"),
@@ -163,7 +163,7 @@ class AnihubApp(App[str | None]):
             self.notify(str(e), severity="error", markup=False)
             return
         for screen in self.screen_stack:
-            if isinstance(screen, AnimeScreen) and screen.matches(extractor_name, url):
+            if isinstance(screen, AnimeScreen) and screen.matches(extractor_name, key):
                 screen.set_mal(anime)
         if not fields:
             return

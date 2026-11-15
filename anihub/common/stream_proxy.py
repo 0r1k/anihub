@@ -8,6 +8,10 @@ The proxy keeps working connections to the hosting alive and reuses them for the
 a connection attempt after a few seconds and tries again, and resumes a broken download from the last
 received byte. Players get `http://127.0.0.1:<port>/<origin id>/<path of the hosting>` urls: relative urls
 of HLS playlists keep working, absolute ones are rewritten to the proxy as well.
+
+A download the player stops reading (pause, full cache) is closed and requested again from the next byte
+when the player reads on: OK.ru's CDN (okcdn.ru, yummy-anime) sends a few megabytes of other data on
+a connection that stood for minutes, and the picture and the sound break for minutes.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ import asyncio
 import contextlib
 import logging
 import re
+import time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlsplit
@@ -34,6 +39,8 @@ CONNECT_TIMEOUT = 3
 # no data from the hosting for this long: reconnect and continue from the received byte
 READ_TIMEOUT = 15
 ATTEMPTS = 8
+# the player has not read for this long: the download is requested again from the next byte, see above
+IDLE_RECONNECT = 10
 # dash manifests may point to other hosts with absolute urls and are not rewritten: played directly
 PROXIED_TYPES = ("m3u8", "mp4", "webm")
 _RETRY_STATUSES = (502, 503, 504)
@@ -252,16 +259,23 @@ class StreamProxy:
         size: int | None = None  # of the whole file: a resume from another file is refused
         body_start = _range_start(wanted_range)  # file position of the first byte given to the player
 
-        for attempt in range(ATTEMPTS):
+        attempt = 0  # failed tries in a row
+        idle = 0.0  # seconds the player did not read before this request
+        while attempt < ATTEMPTS:
+            attempt += 1
             offset = body_start + sent  # file position the body continues from
             if started:
                 if sent:
                     request_headers["range"] = f"bytes={offset}-{_range_end(wanted_range)}"
-                logger.info("stream proxy: resume %s at byte %s (attempt %s)", url, offset, attempt + 1)
+                if idle:
+                    logger.info("stream proxy: player idle for %.0fs, request %s again at byte %s", idle, url, offset)
+                else:
+                    logger.info("stream proxy: resume %s at byte %s (attempt %s)", url, offset, attempt)
+            idle = 0.0
             try:
                 async with self._client.stream("GET", url, headers=request_headers) as response:
                     if not started:
-                        if response.status_code in _RETRY_STATUSES and attempt < ATTEMPTS - 1:
+                        if response.status_code in _RETRY_STATUSES and attempt < ATTEMPTS:
                             logger.info("stream proxy: %s %s, retry", response.status_code, url)
                             await asyncio.sleep(1)
                             continue
@@ -309,14 +323,22 @@ class StreamProxy:
                         data = chunk[skip:]
                         skip = max(0, skip - len(chunk))
                         if data:
+                            waiting = time.monotonic()
                             await self._send(writer, data)
                             sent += len(data)
+                            idle = time.monotonic() - waiting
+                            if idle > IDLE_RECONNECT and (length is None or sent < length):
+                                break
+                            idle = 0.0
+                    if idle:
+                        attempt = 0
+                        continue
                     if length is None or sent >= length:
                         return length is not None
                     logger.info("stream proxy: %s ended at %s of %s bytes", url, sent, length)
             except httpx.TransportError as e:
                 # lost connection attempt, a stalled or broken download: try again on another connection
-                logger.info("stream proxy: %s on %s (attempt %s)", type(e).__name__, url, attempt + 1)
+                logger.info("stream proxy: %s on %s (attempt %s)", type(e).__name__, url, attempt)
                 continue
         if not started:
             return await self._send_error(writer, 504, "Gateway Timeout")

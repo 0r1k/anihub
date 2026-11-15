@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 import attr
 
 from anihub.common.config import get_data_dir
-from anihub.common.history import restore_item, serialize_item
+from anihub.common.history import entry_key, item_key, restore_item, serialize_item
 from anihub.common.mal import ListStatus
 
 if TYPE_CHECKING:
@@ -66,27 +66,28 @@ def _write(links: list[dict[str, Any]]) -> None:
     _path().write_text(json.dumps(links[:LINKS_LIMIT], ensure_ascii=False, indent=4), encoding="utf-8")
 
 
-def _same_item(link: dict[str, Any], extractor_name: str, url: str) -> bool:
-    return link.get("extractor_name") == extractor_name and link.get("data", {}).get("url") == url
+def _same_item(link: dict[str, Any], extractor_name: str, key: str) -> bool:
+    return link.get("extractor_name") == extractor_name and entry_key(link) == key
 
 
 def get(item: Any, extractor_name: str) -> dict[str, Any] | None:
-    return next((link for link in read() if _same_item(link, extractor_name, item.url)), None)
+    return get_by_key(extractor_name, item_key(item))
 
 
-def get_by_url(extractor_name: str, url: str) -> dict[str, Any] | None:
-    return next((link for link in read() if _same_item(link, extractor_name, url)), None)
+def get_by_key(extractor_name: str, key: str) -> dict[str, Any] | None:
+    """The link of the title by its `item_key`."""
+    return next((link for link in read() if _same_item(link, extractor_name, key)), None)
 
 
 def save(item: Any, extractor_name: str, mal: MalAnime) -> dict[str, Any]:
     link = {**serialize_item(item, extractor_name), "mal_id": mal.id, "mal_title": mal.title}
-    links = [i for i in read() if not _same_item(i, extractor_name, item.url)]
+    links = [i for i in read() if not _same_item(i, extractor_name, item_key(item))]
     _write([link, *links])
     return link
 
 
 def delete(item: Any, extractor_name: str) -> None:
-    _write([i for i in read() if not _same_item(i, extractor_name, item.url)])
+    _write([i for i in read() if not _same_item(i, extractor_name, item_key(item))])
 
 
 def find_by_mal_id(mal_id: int, extractor_name: str | None = None) -> dict[str, Any] | None:

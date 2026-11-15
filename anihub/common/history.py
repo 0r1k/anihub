@@ -52,6 +52,28 @@ def serialize_item(item: Any, extractor_name: str) -> dict[str, Any]:
     }
 
 
+# sites without title pages (anilibria, animevost) give every title the url "_": the site id tells them apart
+_NO_URL = ("", "_")
+
+
+def _key(url: str, data: Any) -> str:
+    if url not in _NO_URL or not isinstance(data, dict):
+        return url
+    value = data.get("id") or data.get("alias")
+    return f"{url}#{value}" if value else url
+
+
+def item_key(item: Any) -> str:
+    """What tells the title apart from the others of its site: the url, or the id if the site gives no urls."""
+    return _key(item.url, getattr(item, "data", None))
+
+
+def entry_key(entry: dict[str, Any]) -> str:
+    """`item_key` of a saved title (`serialize_item`)."""
+    data = entry.get("data", {})
+    return _key(data.get("url", ""), data.get("data", {}).get("data"))
+
+
 def serialize_source(episode_title: str, source: BaseSource, ordinal: int | None = None) -> dict[str, Any]:
     data = _public_fields(source)
     return {
