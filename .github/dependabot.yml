@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # the workflows pin actions to commit SHAs: Dependabot moves the pins and their version comments to new releases
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    # a compromised release is usually found and pulled within days
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]

@@ -13,7 +13,8 @@ from anicli_api.tools.helpers import get_video_by_quality
 
 from anihub.common import history
 from anihub.common.anicli_api_helpers import videos_iterator
-from anihub.common.players import PlayerNotFoundError, create_player
+from anihub.common.m3u import UnsafeVideoUrlError
+from anihub.common.players import PlayerArgsError, PlayerFailedError, PlayerNotFoundError, create_player
 
 from .i18n import t
 
@@ -67,7 +68,7 @@ async def source_videos(source: BaseSource) -> list[Video]:
     """`source.a_get_videos()` cached for VIDEOS_TTL (the episode is in the source url)."""
     key = (source.url, getattr(source, "cdn_videohub_vk_id", None))
     cached = _videos_cache.get(key)
-    if cached and time.monotonic() - cached[0] < VIDEOS_TTL:
+    if cached and _fresh(cached[0]):
         return cached[1]
     request = _videos_requests.get(key)
     if request is None:
@@ -78,8 +79,15 @@ async def source_videos(source: BaseSource) -> list[Video]:
     return await asyncio.shield(request)
 
 
+def _fresh(cached_at: float) -> bool:
+    return time.monotonic() - cached_at < VIDEOS_TTL
+
+
 async def _fetch_videos(source: BaseSource, key: tuple[str, str | None]) -> list[Video]:
     videos = list(await source.a_get_videos())
+    # a long session opens many episodes: expired links are dropped, not kept until exit
+    for stale in [k for k, (cached_at, _) in _videos_cache.items() if not _fresh(cached_at)]:
+        del _videos_cache[stale]
     if videos:
         _videos_cache[key] = (time.monotonic(), videos)
     return videos
@@ -91,7 +99,10 @@ def max_quality(videos: Sequence[Video]) -> int:
 
 
 async def _pick_video(source: BaseSource, quality: int) -> Video:
-    player = urlsplit(source.url).netloc
+    try:
+        player = urlsplit(source.url).netloc
+    except ValueError:  # a broken link from the site (`http://[x/`): named in the message as it is
+        player = source.url
     try:
         videos = await source_videos(source)
     except Exception as e:
@@ -136,6 +147,12 @@ async def _run_player(
         raise PlaybackError(
             t("Player not found: {command}. Choose another one in settings (F2)", command=e.command)
         ) from e
+    except PlayerArgsError as e:
+        raise PlaybackError(t("Wrong player arguments: {error}. Fix them in settings (F2)", error=e)) from e
+    except PlayerFailedError as e:
+        raise PlaybackError(t("The player could not play «{title}». Try another player", title=e.title)) from e
+    except UnsafeVideoUrlError as e:
+        raise PlaybackError(t("The site returned a wrong video link. Try another player")) from e
     return PlayerResult(completed, player.watched)
 
 

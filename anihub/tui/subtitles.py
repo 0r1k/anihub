@@ -27,7 +27,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_SUBTITLES = re.compile(r"субтитр|subtitle|\bsub|sub\b|оригинал", re.IGNORECASE)
+# the word itself, not every word that starts with it: "Subaru Dub", "Submarine" are dubs. The original audio
+# alone ("Оригинальная озвучка") does not promise subtitles: sites name them, "Оригинал (+субтитры)"
+_SUBTITLES = re.compile(
+    r"субтитр|subtitle"
+    # a whole word: "СУБ", "[SUB]", "Eng subs", "Hardsub"
+    r"|(?<![^\W\d_])(?:суб|(?:soft|hard|fan)?subs?|subbed)(?![^\W\d_])"
+    # a part of a team name in CamelCase: "SubVost", "YakuSub", "HorribleSubs"
+    r"|(?-i:(?<![A-Z])Subs?(?![a-z]))",
+    re.IGNORECASE,
+)
 _BRACKETS = re.compile(r"\[[^\]]*\]")
 # seasons are written in many ways: "[ТВ-2]", "2 сезон", "Сезон 2", "(второй сезон)", "2nd Season", "Durarara!!x2"
 _SEASON = re.compile(
@@ -49,8 +58,10 @@ _ORDINALS = {
     "шест": 6,
     "шост": 6,
 }
-# "[1-12 из 12]", "2 сезон, 12 серия", "Завершен (все серии)"
-_EPISODES = re.compile(r"\[[^\]]*\d+\s*-\s*\d+[^\]]*\]|\d+\s*(?:сери|епізод|episode)\w*|все серии|завершен\w*")
+# "[1-12 из 12]", "2 сезон, 12 серия", "12 серій", "Завершен (все серии)"
+_EPISODES = re.compile(r"\[[^\]]*\d+\s*-\s*\d+[^\]]*\]|\d+\s*(?:сери|сері|епізод|episode)\w*|все серии|завершен\w*")
+# case, "ё" and the apostrophes of ukrainian ("п'ятий", "п’ятий", "пʼятий") do not tell titles apart
+_FOLD = str.maketrans({"ё": "е", "’": "'", "ʼ": "'"})
 SITE_TIMEOUT = 20
 PLAYERS_TIMEOUT = 10
 # search results of a site looked at, and title pages opened to check the original name or the MAL id
@@ -63,8 +74,16 @@ _LEARN_WAIT = 8
 _CYRILLIC = re.compile(r"[а-яёіїєґ]", re.IGNORECASE)
 
 
+def _translation_type(source: Any) -> str:
+    """anilibme names a player by the team only ("Crunchyroll"), the kind of the translation is in its data."""
+    data = getattr(source, "data", None)
+    kind = data.get("translation_type") if isinstance(data, dict) else None
+    label = kind.get("label") if isinstance(kind, dict) else None
+    return label if isinstance(label, str) else ""
+
+
 def is_subtitles(source: BaseSource) -> bool:
-    return bool(_SUBTITLES.search(source.title))
+    return bool(_SUBTITLES.search(source.title) or _SUBTITLES.search(_translation_type(source)))
 
 
 def subtitles_first(sources: Iterable[Any]) -> list[Any]:
@@ -120,9 +139,13 @@ def _ordinal_season(match: re.Match[str]) -> str:
     return f" {number} " if number > 1 else " "
 
 
+def _fold(title: str) -> str:
+    return title.casefold().translate(_FOLD)
+
+
 def _words(title: str) -> set[str]:
     """Words of the title with seasons as numbers: "Наука влюблена (второй сезон)" -> {наука, влюблена, 2}."""
-    text = _EPISODES.sub(" ", title.casefold().replace("ё", "е"))
+    text = _EPISODES.sub(" ", _fold(title))
     text = _SEASON.sub(_season, _ORDINAL_SEASON.sub(_ordinal_season, text))
     return set(re.findall(r"\w+", text))
 
@@ -132,7 +155,7 @@ def _numbers(words: set[str]) -> set[str]:
 
 
 def _first_word(title: str) -> str:
-    return next(iter(re.findall(r"\w+", title.casefold().replace("ё", "е"))), "")
+    return next(iter(re.findall(r"\w+", _fold(title))), "")
 
 
 @dataclass

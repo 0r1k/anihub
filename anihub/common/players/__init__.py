@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from .base import BasePlayer, CustomPlayer, PlayerNotFoundError, VLCPlayer, is_installed
+from .base import (
+    BasePlayer,
+    CustomPlayer,
+    PlayerArgsError,
+    PlayerFailedError,
+    PlayerNotFoundError,
+    VLCPlayer,
+    is_installed,
+    resolve_command,
+)
 from .mpv import MPVPlayer
 
 if TYPE_CHECKING:
@@ -19,11 +28,14 @@ __all__ = [
     "BasePlayer",
     "CustomPlayer",
     "MPVPlayer",
+    "PlayerArgsError",
+    "PlayerFailedError",
     "PlayerNotFoundError",
     "VLCPlayer",
     "create_player",
     "is_installed",
     "player_command",
+    "resolve_command",
 ]
 
 
@@ -44,7 +56,7 @@ def create_player(
     save_time: bool = False,
     on_watched: Callable[[str], None] | None = None,
 ) -> BasePlayer:
-    kwargs = {"args": args, "start": start, "save_time": save_time, "on_watched": on_watched}
+    kwargs: dict[str, Any] = {"args": args, "start": start, "save_time": save_time, "on_watched": on_watched}
     if player == "mpv":
         return MPVPlayer(videos, titles, **kwargs)
     if player == "vlc":

@@ -6,7 +6,6 @@ or by the user) are stored in the data dir and reused: also to open a MAL list e
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from pathlib import Path
@@ -14,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import attr
 
+from anihub.common import storage
 from anihub.common.config import get_data_dir
 from anihub.common.history import entry_key, item_key, restore_item, serialize_item
 from anihub.common.mal import ListStatus
@@ -52,18 +52,18 @@ def _path() -> Path:
 
 
 def read() -> list[dict[str, Any]]:
-    try:
-        data = json.loads(_path().read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return []
-    except (OSError, ValueError):
-        logger.warning("broken MAL links file %s", _path(), exc_info=True)
-        return []
-    return data if isinstance(data, list) else []
+    """The links, the latest first. A broken file is moved aside (see storage), not overwritten by the next link."""
+    links: list[Any] = storage.read_json(_path(), [])
+    return [link for link in links if isinstance(link, dict)]
 
 
 def _write(links: list[dict[str, Any]]) -> None:
-    _path().write_text(json.dumps(links[:LINKS_LIMIT], ensure_ascii=False, indent=4), encoding="utf-8")
+    # logged, not raised: links are saved from title pages and MAL workers, where a file error would crash the app.
+    # The title is matched again the next time it is opened
+    try:
+        storage.write_json(_path(), links[:LINKS_LIMIT])
+    except (OSError, TypeError, ValueError):
+        logger.warning("failed to save MAL links", exc_info=True)
 
 
 def _same_item(link: dict[str, Any], extractor_name: str, key: str) -> bool:
@@ -105,9 +105,13 @@ def restore(link: dict[str, Any], http: T_KW_HTTPS | None = None) -> Any:
 # --- matching ----------------------------------------------------------------
 
 
+# how deep `_walk` looks into the nested data of an item
+_WALK_DEPTH = 4
+
+
 def _walk(value: Any, depth: int = 0):
     """Yield (key, value, parent dict) of nested dicts and lists."""
-    if depth > 4:
+    if depth > _WALK_DEPTH:
         return
     if isinstance(value, dict):
         for k, v in value.items():

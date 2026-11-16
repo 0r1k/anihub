@@ -47,7 +47,8 @@ async def videos_iterator(
     how it works:
     1. iterate in episodes
     2. iterate in source and compare dubber name (source.title) and base player url.netloc
-    3. iterate until not found player provider (apologize, not exists target video with required dubber and player provider)
+    3. iterate until not found player provider
+       (apologize, not exists target video with required dubber and player provider)
 
     Args:
         episodes: episodes to iterate over

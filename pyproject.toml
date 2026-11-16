@@ -1,10 +1,11 @@
 [project]
 name = "anihub"
-version="8.2"
+version="8.3"
 description = 'TUI tool for watching anime with russian and ukrainian dubbing or subtitles'
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
+# GPL version 3 (the LICENSE file), no "or any later version" grant
+license = "GPL-3.0-only"
 keywords = []
 authors = [
   { name = "vypivshiy"},
@@ -21,12 +22,22 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
 ]
 dependencies = [
+    # no upper bound: its releases fix the site parsers and `anihub update` brings them to users at once;
+    # CI resolves the newest versions on every run and weekly: it catches a release that breaks anihub
     "anicli-api>=0.12.0",
-    "textual>=6.0.0",
+    # 8.0 added Select.NULL; textual follows semver, so the next major is the one that may break the TUI
+    "textual>=8.0.0,<9",
     "rich>=14.2.0",
-    "typer<0.26",
+    # 0.26 vendors click and drops click_type, which the CLI options use
+    "typer>=0.16.0,<0.26",
+    # imported by the CLI itself (Choice for click_type); typer <0.26 imports click helpers that click 9 removes
+    "click>=8.0.0,<9",
     "textual-image[textual]>=0.12.0",
     "lxml>=5.3.1",
+    # imported directly (proxies, streaming, MAL), not only through anicli-api; socks: socks5:// proxies
+    "httpx[socks]>=0.28.1",
+    # attrs models of the sources (history, MAL links, the anitube extractor)
+    "attrs>=25.3.0",
 ]
 
 [project.optional-dependencies]
@@ -35,6 +46,7 @@ cookies = [
 ]
 dev = [
     "mypy>=1.14.1",
+    "pytest>=8.0",
     "ruff>=0.9.9",
 ]
 # everything optional: browser cookies
@@ -53,7 +65,8 @@ Source = "https://github.com/0r1k/anihub"
 Releases = "https://github.com/0r1k/anihub/releases"
 
 [build-system]
-requires = ["hatchling"]
+# 1.27: core metadata 2.4, where the license is the License-Expression field (older versions write free text)
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
@@ -61,6 +74,14 @@ packages = ["anihub/"]
 
 [tool.hatch.build.targets.sdist]
 include = ["anihub/", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+xfail_strict = true
+# a hung test (the TUI, a socket) prints the traceback of every thread instead of waiting for the CI timeout
+faulthandler_timeout = 120
 
 [tool.ruff]
 target-version = "py310"
@@ -112,3 +133,46 @@ lint.unfixable = [
   # Don't touch unused imports
   "F401",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  # pytest checks with plain `assert` and compares with the expected literal values
+  "S101", "PLR2004",
+  # fakes keep the signature of the function or method they replace
+  "ARG001", "ARG002", "ARG005",
+  # a fake raises its error with an inline message
+  "EM101",
+  # anihub is imported after conftest.py points the user directories to temporary ones
+  "PLC0415",
+]
+"anihub/tui/**" = [
+  # the tui package imports its own modules relatively
+  "TID252",
+  # Textual's way: BINDINGS and the other widget settings are plain class attributes the framework reads
+  # from the class (Textual types HORIZONTAL_BREAKPOINTS so that a ClassVar override does not type check)
+  "RUF012",
+]
+"anihub/main.py" = [
+  # the CLI imports the TUI, rich and the updater only in the command that needs them: fast `--help`
+  "PLC0415",
+  # typer: a bool option is a parameter with a default value
+  "FBT002",
+]
+
+[tool.mypy]
+# the oldest supported python: `mypy anihub` checks what 3.10 users run
+python_version = "3.10"
+packages = ["anihub"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+# anicli-api ships neither inline types (py.typed) nor stubs: its classes are Any for mypy
+module = ["anicli_api", "anicli_api.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# lxml has no inline types; its stubs (lxml-stubs) type every xpath() result as a union of all the XPath
+# value types, which needs a cast at every query of the MAL pages
+module = ["lxml", "lxml.*"]
+ignore_missing_imports = true

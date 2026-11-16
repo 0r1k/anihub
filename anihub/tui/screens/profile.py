@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import webbrowser
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 from rich.console import Group
 from rich.table import Table
@@ -158,7 +158,8 @@ class ProfileScreen(_AnimeActions, Screen[None]):
         Binding("b", "browser", "In browser"),
         Binding("r,f5", "refresh", "Refresh"),
     ]
-    HORIZONTAL_BREAKPOINTS: ClassVar[list[tuple[int, str]]] = [(0, "-narrow"), (110, "-wide")]
+    # typed as Textual declares it (not a ClassVar there)
+    HORIZONTAL_BREAKPOINTS: list[tuple[int, str]] | None = [(0, "-narrow"), (110, "-wide")]
     # left/right between the lists
     LISTS = ("profile-friends", "profile-updates", "profile-favorites")
 
@@ -275,7 +276,7 @@ class ProfileScreen(_AnimeActions, Screen[None]):
         if not self.own and (anime_id := self._anime_id(self.focused)) is not None:
             self.plan_to_watch(anime_id)
 
-    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:  # noqa: ARG002 (Textual's signature)
         # own updates and favorites are in the own list already; on others' profiles only titles can be added
         if action == "plan_to_watch":
             return not self.own and self._anime_id(self.focused) is not None

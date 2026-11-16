@@ -10,14 +10,13 @@ what is checked is kept, and the next load goes on from there.
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import json
 import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from . import storage
 from .config import get_data_dir
 from .mal import ANIME_FIELDS, MalAnime, MalAuthError, MalError, MalRateLimited
 
@@ -78,6 +77,15 @@ def _path() -> Path:
     return get_data_dir() / "mal_feed.json"
 
 
+def _state(data: dict[str, Any]) -> tuple[dict[str, list[Any]], dict[str, list[Any]], float, set[int]]:
+    """Related lists, details, read time and hidden titles of a saved feed. Raises TypeError or ValueError."""
+    related, details = data.get("related", {}), data.get("details", {})
+    if not isinstance(related, dict) or not isinstance(details, dict):
+        msg = "related lists and details are not objects"
+        raise TypeError(msg)
+    return related, details, float(data.get("read_at", 0)), set(data.get("hidden", []))
+
+
 def _timestamp(value: str) -> float:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
@@ -97,28 +105,26 @@ class Feed:
         self.incomplete: tuple[int, int] | None = None
         # the last check was stopped by MAL (307/429): it goes on after RETRY_AFTER
         self.limited = False
+        # a file that is not JSON is moved aside (see storage)
         try:
-            data = json.loads(_path().read_text(encoding="utf-8"))
-            self.related = data.get("related", {})
-            self.details = data.get("details", {})
-            self.read_at = float(data.get("read_at", 0))
-            self.hidden = set(data.get("hidden", []))
-        except FileNotFoundError:
-            pass
-        except (OSError, ValueError, TypeError, AttributeError):
+            self.related, self.details, self.read_at, self.hidden = _state(storage.read_json(_path(), {}))
+        except (TypeError, ValueError):
             logger.warning("broken feed file %s, start over", _path(), exc_info=True)
         if not self.read_at:
             self.read_at = time.time() - FIRST_UNREAD
 
     def save(self) -> None:
+        """Replace the file atomically. A failure is logged: the feed works on, the next load checks again."""
         data = {
             "read_at": self.read_at,
             "hidden": sorted(self.hidden),
             "related": self.related,
             "details": self.details,
         }
-        with contextlib.suppress(OSError):
-            _path().write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        try:
+            storage.write_json(_path(), data, indent=None)
+        except OSError:
+            logger.warning("failed to save the feed state", exc_info=True)
 
     def is_unread(self, item: FeedItem) -> bool:
         return item.added > self.read_at
@@ -141,7 +147,8 @@ class Feed:
         semaphore = asyncio.Semaphore(CONCURRENCY)
         pace = asyncio.Lock()
         now = time.time()
-        state = {"done": 0, "fetched": 0, "last": 0.0, "limited": False}
+        # mixed values: counters (int), the time of the last request (float), a flag (bool)
+        state: dict[str, Any] = {"done": 0, "fetched": 0, "last": 0.0, "limited": False}
 
         async def ask(what: str, request: Callable[[], Awaitable[Any]]) -> Any:
             """The answer, None if it failed or MAL limits requests (then nothing is asked anymore)."""

@@ -100,6 +100,7 @@ anihub update
 - `anihub update -y` — без запитання
 - `anihub update --force` — перевстановити, навіть якщо стоїть остання версія
 - `anihub check-updates` — лише перевірити (anihub — на GitHub, бібліотеку anicli-api — на PyPI)
+- `--proxy scheme://user:password@host:port` в обох командах — перевіряти через проксі; без ключа береться проксі з налаштувань (`F2`). Саме встановлення виконує `uv`, `pipx` або `pip`: вони беруть проксі зі змінних середовища (`HTTPS_PROXY`)
 
 Під час кожного запуску anihub сам перевіряє, чи вийшла нова версія. Якщо вийшла, показує сповіщення й додає в нижній рядок клавішу `F9` «Оновити anihub»: вона лишається там, поки anihub відкритий. `F9` після підтвердження закриває anihub і запускає `anihub update` у тому самому терміналі. На Windows оновлення запускається в окремому вікні після виходу з anihub: запущений `anihub.exe` не можна перезаписати.
 
@@ -254,16 +255,19 @@ anihub веде ваш список на [MyAnimeList](https://myanimelist.net) 
 - `history.json` — історія й місця для «Продовжити»
 - `mal_links.json` — який тайтл на якому сайті прив'язано до якого запису MyAnimeList
 - `ongoing.json` — які серії онгоінгів уже бачили (для мітки `НОВЕ`)
+- `watching.json` — скільки серій було на сайтах у тайтлів із вкладки «Дивлюся» (для мітки `НОВЕ`)
 - `mal_feed.json` — кеш сповіщень: пов'язані тайтли, що прочитано й приховано
 - `anihub.log` — помилки сайтів та інші логи (у термінал вони не пишуться)
+
+Файли замінюються цілком, тож вимкнення комп'ютера посеред запису їх не зіпсує. Якщо файл усе ж пошкоджено, anihub не затирає його, а відкладає поруч як `назва.broken-<дата>-<час>.json` і повідомляє про це: дані з нього можна відновити вручну.
 
 ## Довідка з команд
 
 | Команда | Що робить |
 |---|---|
 | `anihub tui [OPTIONS]` | Запустити інтерфейс |
-| `anihub update [-y] [--force]` | Оновитися до останнього релізу (див. [Оновлення](#оновлення)) |
-| `anihub check-updates` | Перевірити, чи є нова версія |
+| `anihub update [-y] [--force] [--proxy URL]` | Оновитися до останнього релізу (див. [Оновлення](#оновлення)) |
+| `anihub check-updates [--proxy URL]` | Перевірити, чи є нова версія |
 | `anihub version` | Версії anihub і anicli-api |
 
 Опції `anihub tui`:
@@ -278,8 +282,8 @@ anihub веде ваш список на [MyAnimeList](https://myanimelist.net) 
 - `--lang [en|uk]` — мова інтерфейсу
 - `--m3u-size INTEGER` — серій в одному плейлисті (за замовчуванням 6)
 - `--timeout INTEGER` — тайм-аут HTTP, секунд (за замовчуванням 60)
-- `--proxy TEXT` — проксі http(s)/socks4/socks5: `scheme://user:password@host:port`
-- `--cookies-from-browser BROWSER` — взяти cookies з браузера (потрібен `anihub[cookies]`)
+- `--proxy TEXT` — проксі http, https, socks5 або socks5h: `scheme://user:password@host:port`
+- `--cookies-from-browser BROWSER` — взяти cookies з браузера, лише для сайтів джерел (потрібен `anihub[cookies]`)
 - `--cookies PATH` — cookies з файлу у форматі netscape
 - `-H, --header Key=Value` — додати HTTP-заголовок (можна кілька разів)
 - `--header-file PATH` — заголовки з файлу, по одному `Key=Value` на рядок
@@ -292,14 +296,30 @@ cd anihub
 uv run anihub tui           # запустити з вихідного коду
 uv tool install .           # встановити з вихідного коду
 uv build                    # зібрати wheel і sdist у dist/
-uv run python tests/smoke_test.py
+```
+
+Тести (офлайн, без мережі й без вашого конфігу — вони працюють у тимчасових теках):
+
+```shell
+uv run --extra dev pytest                                  # з вихідного коду
+uv run --extra dev pytest tests/test_smoke.py -k stream    # частина тестів
+```
+
+CI запускає ті самі тести проти встановленого wheel (`ANIHUB_TEST_INSTALLED=1` не дозволяє підхопити вихідні файли замість пакета). Локально так: `uv build --clear --out-dir /tmp/dist && ANIHUB_TEST_INSTALLED=1 uv run --no-project --isolated --with /tmp/dist/anihub-*.whl --with pytest pytest`.
+
+Лінтери (версії з `uv.lock`, CI запускає ті самі команди):
+
+```shell
+uv run --all-extras ruff check anihub tests                # помилки й стиль
+uv run --all-extras ruff format --check anihub tests       # форматування (без --check: виправити)
+uv run --all-extras mypy anihub                            # типи
 ```
 
 - [anihub/tui/](anihub/tui/) — інтерфейс
 - [anihub/common/](anihub/common/) — MyAnimeList, історія, плеєри, оновлення
 - [anihub/extractors/](anihub/extractors/) — власні парсери сайтів (`anitube`); інші джерела беруться з [anicli-api](https://github.com/vypivshiy/anicli-api)
 
-Пакет — чистий Python (`py3-none-any`): одна збірка працює на всіх ОС. CI ([build.yml](.github/workflows/build.yml)) на кожен пуш збирає його на Linux, macOS і Windows з Python 3.10, 3.12 і 3.14, встановлює через `uv tool install` і проганяє офлайн smoke-тест інтерфейсу ([tests/smoke_test.py](tests/smoke_test.py)).
+Пакет — чистий Python (`py3-none-any`): одна збірка працює на всіх ОС. CI ([build.yml](.github/workflows/build.yml)) на кожен пуш збирає його на Linux, macOS і Windows з Python 3.10, 3.12 і 3.14, встановлює через `uv tool install` і проганяє тести з [tests/](tests/) на встановленому пакеті. Залежності щоразу беруться найновіші, як у користувачів при встановленні, а окрема задача перевіряє найстаріші версії, які дозволяє `pyproject.toml`. Раз на тиждень усе це запускається й без нових комітів: так видно реліз залежності, що ламає anihub, ще до того, як на нього натраплять користувачі.
 
 ### Випуск нової версії
 
@@ -316,8 +336,8 @@ git tag v7.3
 git push origin v7.3
 ```
 
-[release.yml](.github/workflows/release.yml) перевірить, що тег збігається з версією в `pyproject.toml`, збере пакет, прожене smoke-тест і опублікує реліз з файлами та нотатками з комітів (їх можна відредагувати на сторінці релізу). Після цього `anihub update` у користувачів запропонує нову версію, а посилання встановлення почне вести на неї.
+[release.yml](.github/workflows/release.yml) перевірить, що тег збігається з версією в `pyproject.toml`, дочекається, поки пройде вся матриця ОС × Python для цього коміту, і опублікує реліз із тими самими файлами, що пройшли тести, з файлами та нотатками з комітів (їх можна відредагувати на сторінці релізу). Після цього `anihub update` у користувачів запропонує нову версію, а посилання встановлення почне вести на неї.
 
 ## Ліцензія
 
-[GPL-3.0](LICENSE). anihub виріс із проєкту [ani-cli-ru](https://github.com/vypivshiy/ani-cli-ru).
+[GPL-3.0](LICENSE) (лише версія 3). anihub виріс із проєкту [ani-cli-ru](https://github.com/vypivshiy/ani-cli-ru).

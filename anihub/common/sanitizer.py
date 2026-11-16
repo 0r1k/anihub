@@ -31,7 +31,7 @@ def _deaccent(s: str) -> str:
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
 
 
-def sanitize_filename(s: str, restricted: bool = False, is_id: bool = False) -> str:
+def sanitize_filename(s: str, *, restricted: bool = False, is_id: bool = False) -> str:
     """
     Simplified filename sanitizer suitable for shell usage.
 
@@ -75,7 +75,7 @@ def sanitize_filename(s: str, restricted: bool = False, is_id: bool = False) -> 
     if restricted:
         # In strict mode, keep only alphanumeric and basic punctuation
         # Drop everything that is not ASCII or is a space
-        s = "".join(ch for ch in s if ord(ch) <= 127 and not ch.isspace())
+        s = "".join(ch for ch in s if ch.isascii() and not ch.isspace())
 
     # Use translation table for fast character replacement
     s = s.translate(_DANGEROUS_CHARS_TABLE)

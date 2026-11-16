@@ -10,18 +10,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html
-import json
 import logging
-import os
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 import httpx
 
+from anihub.common import storage
 from anihub.common.config import get_config_dir
 
 logger = logging.getLogger(__name__)
@@ -31,6 +30,7 @@ TOKEN_URL = "https://myanimelist.net/v1/oauth2/token"
 API_URL = "https://api.myanimelist.net/v2"
 REDIRECT_PORT = 8765
 REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/callback"
+_CALLBACK_PATH = urlsplit(REDIRECT_URI).path
 APICONFIG_URL = "https://myanimelist.net/apiconfig"
 
 # user list statuses in the MAL site order
@@ -57,8 +57,23 @@ SCORE_LABELS = {
 ANIME_FIELDS = "alternative_titles,main_picture,num_episodes,media_type,start_season,status,my_list_status"
 # public pages of the site: profiles and friends (the API has no other users but their lists)
 SITE_URL = "https://myanimelist.net"
+# MAL rejects search queries shorter than that
+MIN_QUERY_LENGTH = 3
 # refresh the access token a bit before it expires
 _EXPIRY_MARGIN = 300
+# OAuth errors (RFC 6749 5.2) of the token endpoint after which the token will never work again: log in anew.
+# Anything else (429, 5xx, a proxy page, a timeout) is MAL or the network failing for a while.
+_GRANT_REFUSED = frozenset({"invalid_grant", "invalid_client", "unauthorized_client"})
+# league/oauth2-server 7.x answers a dead refresh token with 401 (or 400) invalid_request: refused too
+_REFRESH_DEAD = _GRANT_REFUSED | {"invalid_request"}
+# after a failed refresh the next try waits: MAL is struggling, or rate limiting
+_REFRESH_RETRY_DELAY = 60
+_HTTP_BAD_REQUEST = 400
+_HTTP_UNAUTHORIZED = 401
+_HTTP_NOT_FOUND = 404
+_HTTP_SERVER_ERROR = 500
+# MAL answers too frequent requests with 429, or with 307 to an HTML page
+_RATE_LIMITED = (307, 429)
 
 
 class MalError(Exception):
@@ -69,8 +84,12 @@ class MalAuthError(MalError):
     """Not logged in or the refresh token is revoked/expired: the user should log in again."""
 
 
-class MalRateLimited(MalError):
+class MalRateLimited(MalError):  # noqa: N818 (public name: the TUI and the tests catch it)
     """MAL refuses too frequent requests: 429, or 307 to an HTML page instead of the API answer."""
+
+
+class _ForeignRedirectError(MalError):
+    """The redirect is not of this login attempt (no or another `state`): a tab of an earlier attempt."""
 
 
 @dataclass
@@ -155,34 +174,49 @@ class Token:
 
     @classmethod
     def load(cls) -> Token | None:
-        try:
-            data = json.loads(cls.path().read_text(encoding="utf-8"))
-            return cls(**data)
-        except FileNotFoundError:
+        """The saved token, None if there is none. A file that is not JSON is moved aside (see storage)."""
+        data: dict[str, Any] = storage.read_json(cls.path(), {})
+        if not data:
             return None
-        except (OSError, ValueError, TypeError):
-            logger.warning("broken MAL token file %s", cls.path(), exc_info=True)
+        refresh_token = data.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token:
+            logger.warning("no refresh token in %s, log in to MyAnimeList again", cls.path())
+            # not a login: kept aside and shown to the user like a broken file, the next login writes a new one
+            storage.set_aside(cls.path())
             return None
+        # the refresh token is the login: the rest, if broken, is got anew by a refresh at the first request
+        access_token, expires_at, username = data.get("access_token"), data.get("expires_at"), data.get("username")
+        if not isinstance(access_token, str) or not access_token or not isinstance(expires_at, (int, float)):
+            access_token, expires_at = "", 0
+        return cls(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_at=float(expires_at),
+            username=username if isinstance(username, str) else "",
+        )
 
     def save(self) -> None:
-        path = self.path()
+        """Raises OSError: the token stays in memory, the next start asks to log in again."""
         # the token gives write access to the user list: readable by the owner only
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(self.__dict__, f, indent=4)
+        storage.write_json(self.path(), asdict(self), private=True)
 
     @classmethod
     def delete(cls) -> None:
         cls.path().unlink(missing_ok=True)
 
     @classmethod
-    def from_response(cls, data: dict[str, Any], username: str = "") -> Token:
-        return cls(
-            access_token=data["access_token"],
-            refresh_token=data["refresh_token"],
-            expires_at=time.time() + int(data.get("expires_in", 0)),
-            username=username,
-        )
+    def from_response(cls, data: dict[str, Any], username: str = "", refresh_token: str = "") -> Token:
+        """The token from the answer of the token endpoint. `refresh_token`: the current one, kept if MAL sends none."""
+        access = data.get("access_token")
+        refresh = data.get("refresh_token") or refresh_token
+        if not isinstance(access, str) or not access or not isinstance(refresh, str) or not refresh:
+            msg = "MyAnimeList answered without a token, try again later"
+            raise MalError(msg)
+        try:
+            expires_in = float(data.get("expires_in") or 0)
+        except (TypeError, ValueError):
+            expires_in = 0
+        return cls(access_token=access, refresh_token=refresh, expires_at=time.time() + expires_in, username=username)
 
 
 # --- OAuth -------------------------------------------------------------------
@@ -209,25 +243,43 @@ class AuthRequest:
         return f"{AUTH_URL}?{urlencode(params)}"
 
     def parse_redirect(self, value: str) -> str:
-        """Extract the authorization code from the redirect url (or accept the bare code)."""
+        """The authorization code from the pasted address of the redirect page, or the pasted code itself."""
         value = value.strip()
-        if "code=" not in value and "error=" not in value:
-            if not value:
-                msg = "empty authorization code"
-                raise MalError(msg)
+        if not value:
+            msg = "empty authorization code"
+            raise MalError(msg)
+        # a code is letters and digits: anything like an address must be the redirect of this attempt
+        if not set(value) & set("/?&=:"):
             return value
-        query = parse_qs(urlsplit(value).query or value.split("?", 1)[-1])
-        if error := query.get("error"):
+        query = urlsplit(value).query if "?" in value else value
+        if not parse_qs(query).keys() & {"code", "error"}:
+            msg = "no authorization code in the address"
+            raise MalError(msg)
+        return self.parse_callback(query)
+
+    def parse_callback(self, query: str, *, accept_stateless_error: bool = False) -> str:
+        """The authorization code from the query of the redirect. Strict: only the redirect of this attempt.
+
+        `accept_stateless_error`: an `error` without any `state` is reported as the failure of this attempt (MAL's
+        denial redirect may carry no state; it only reports a failure, so it is safe). A different state stays foreign.
+
+        Raises MalError: `_ForeignRedirectError` without the `state` of this attempt.
+        """
+        params = parse_qs(query)
+        if accept_stateless_error and "state" not in params and (error := params.get("error")):
             msg = f"authorization denied: {error[0]}"
             raise MalError(msg)
-        if query.get("state", [self.state])[0] != self.state:
-            msg = "state mismatch: the url is from another login attempt"
+        if params.get("state") != [self.state]:
+            msg = "state mismatch: the address is from another login attempt"
+            raise _ForeignRedirectError(msg)
+        if error := params.get("error"):
+            msg = f"authorization denied: {error[0]}"
             raise MalError(msg)
-        try:
-            return query["code"][0]
-        except (KeyError, IndexError):
-            msg = "no authorization code in the url"
-            raise MalError(msg) from None
+        code = params.get("code", [])
+        if len(code) != 1:
+            msg = "no authorization code in the address"
+            raise MalError(msg)
+        return code[0]
 
 
 _CALLBACK_PAGE = (
@@ -235,29 +287,36 @@ _CALLBACK_PAGE = (
     "<body style='font-family:sans-serif;text-align:center;margin-top:20vh'><h2>{}</h2>"
     "<p>You can close this tab and return to the terminal.</p>"
 )
+_NOT_FOUND = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 
 
 async def wait_for_redirect(auth: AuthRequest) -> str:
     """Run a one-shot http server on REDIRECT_URI and return the authorization code.
 
-    Raises OSError if the port is busy (then the user can paste the redirect url manually).
+    Only the redirect of this login attempt ends the wait: other requests (the favicon, a tab of an earlier
+    attempt) are answered and ignored. Raises OSError if the port is busy (then the user can paste the redirect
+    url manually), MalError if the user denied access.
     """
     loop = asyncio.get_running_loop()
     result: asyncio.Future[str] = loop.create_future()
+    connections: set[asyncio.StreamWriter] = set()
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        connections.add(writer)
         try:
             request_line = (await asyncio.wait_for(reader.readline(), 10)).decode("latin-1")
             # drain headers
             while await asyncio.wait_for(reader.readline(), 10) not in (b"\r\n", b"\n", b""):
                 pass
             parts = request_line.split()
-            target = parts[1] if len(parts) > 1 else ""
-            if not target.startswith("/callback"):
-                writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            url = urlsplit(parts[1]) if len(parts) > 1 else None
+            if url is None or url.path != _CALLBACK_PATH:
+                writer.write(_NOT_FOUND)
                 return
             try:
-                code = auth.parse_redirect(target)
+                code = auth.parse_callback(url.query, accept_stateless_error=True)
+            except _ForeignRedirectError as e:
+                message, ok = f"Login failed: {e}", False
             except MalError as e:
                 message, ok = f"Login failed: {e}", False
                 if not result.done():
@@ -272,19 +331,24 @@ async def wait_for_redirect(auth: AuthRequest) -> str:
                 b"HTTP/1.1 " + status + b"\r\nContent-Type: text/html; charset=utf-8\r\n"
                 b"Content-Length: " + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body
             )
-        except (asyncio.TimeoutError, OSError):
+        # ValueError: a line over the reader limit, an invalid address
+        except (asyncio.TimeoutError, OSError, ValueError):
             pass
         finally:
+            connections.discard(writer)
             with contextlib.suppress(OSError):
                 await writer.drain()
-                writer.close()
+            writer.close()
 
     server = await asyncio.start_server(handle, "localhost", REDIRECT_PORT)
     try:
-        async with server:
-            return await result
+        return await result
     finally:
+        # not `async with server`: it waits for every connection, and browsers keep spare ones open,
+        # so the login would hang until they time out
         server.close()
+        for writer in list(connections):
+            writer.close()
 
 
 # --- client ------------------------------------------------------------------
@@ -296,6 +360,8 @@ class MalClient:
         self.token = Token.load()
         self.http = httpx.AsyncClient(proxy=proxy or None, timeout=timeout)
         self._refresh_lock = asyncio.Lock()
+        # time.time() of the last failed refresh (MAL failing, not a refusal)
+        self._refresh_failed_at = 0.0
 
     @property
     def logged_in(self) -> bool:
@@ -317,7 +383,10 @@ class MalClient:
         return AuthRequest(self.client_id)
 
     async def login(self, auth: AuthRequest, code: str) -> str:
-        """Exchange the authorization code for tokens, returns the user name."""
+        """Exchange the authorization code for tokens, returns the user name.
+
+        Raises OSError if the token could not be saved: logged in until anihub exits.
+        """
         data = await self._token_request(
             {
                 "client_id": auth.client_id,
@@ -330,52 +399,110 @@ class MalClient:
         self.token = Token.from_response(data)
         try:
             me = await self._request("GET", "/users/@me")
-            self.token.username = me.get("name", "")
+            self.token.username = me.get("name", "") if isinstance(me, dict) else ""
         finally:
             self.token.save()
         return self.token.username
 
     def logout(self) -> None:
         self.token = None
-        Token.delete()
+        try:
+            Token.delete()
+        except OSError:
+            # logged out until anihub exits: the next start reads the token again
+            logger.warning("cannot delete %s", Token.path(), exc_info=True)
 
     async def _token_request(self, form: dict[str, str]) -> dict[str, Any]:
+        """POST to the token endpoint. MalAuthError only if MAL refused the grant: logging in again is the way."""
         try:
             resp = await self.http.post(TOKEN_URL, data=form)
         except httpx.HTTPError as e:
             msg = f"MyAnimeList is unavailable: {e}"
             raise MalError(msg) from e
-        if resp.status_code >= 400:
-            try:
-                detail = resp.json()
-                detail = detail.get("hint") or detail.get("message") or detail.get("error") or resp.text
-            except ValueError:
-                detail = resp.text
+        try:
+            data = resp.json()
+        except ValueError:
+            data = None
+        if resp.is_success and isinstance(data, dict):
+            return data
+        # the form is not logged: it has the refresh token or the authorization code
+        logger.warning("MyAnimeList token request failed: %s %s", resp.status_code, resp.text[:500])
+        error = data.get("error") if isinstance(data, dict) else None
+        detail = (data.get("hint") or data.get("message") or error) if isinstance(data, dict) else None
+        if not isinstance(error, str):
+            error = None
+        if resp.status_code in _RATE_LIMITED:
+            msg = f"MyAnimeList limits requests ({resp.status_code}), try again in a few minutes"
+            raise MalRateLimited(msg)
+        # 401 at the token endpoint is always a refusal; 400 only with an OAuth error saying so
+        if resp.status_code == _HTTP_UNAUTHORIZED or (resp.status_code == _HTTP_BAD_REQUEST and error in _REFRESH_DEAD):
             msg = f"MyAnimeList auth error {resp.status_code}: {detail}"
             raise MalAuthError(msg)
-        return resp.json()
+        if resp.status_code >= _HTTP_SERVER_ERROR:
+            msg = f"MyAnimeList is unavailable ({resp.status_code}), try again later"
+        elif resp.is_success:
+            msg = "MyAnimeList answered not JSON, try again later"
+        else:
+            msg = f"MyAnimeList auth error {resp.status_code}" + (f": {detail}" if detail else "")
+        raise MalError(msg)
 
     async def _refresh(self, stale: Token) -> None:
+        """A new access token. Only a refused refresh token logs out: MAL or the network failing keep the login."""
         async with self._refresh_lock:
             # another request has already refreshed it
             if self.token is not stale:
+                return
+            # another anihub instance has refreshed it: MAL revoked the refresh token of `stale` then
+            if self._take_saved(stale):
                 return
             try:
                 data = await self._token_request(
                     {"client_id": self.client_id, "grant_type": "refresh_token", "refresh_token": stale.refresh_token}
                 )
             except MalAuthError:
-                self.logout()
+                # refused because another instance has refreshed it meanwhile
+                if self._take_saved(stale):
+                    return
+                self.token = None
+                # the file may hold a token another instance has saved just now: not ours to delete
+                saved = Token.load()
+                if saved is None or saved.refresh_token == stale.refresh_token:
+                    self.logout()
                 raise
-            self.token = Token.from_response(data, stale.username)
-            self.token.save()
+            self.token = Token.from_response(data, stale.username, stale.refresh_token)
+            try:
+                self.token.save()
+            except OSError:
+                # the new token works until anihub exits, the saved one is revoked: the next start asks to log in
+                logger.warning("cannot save %s", Token.path(), exc_info=True)
+
+    def _take_saved(self, stale: Token) -> bool:
+        """Use the saved token if it is newer than `stale`: refreshed or logged in anew by another instance."""
+        saved = Token.load()
+        # not newer: the saved one is older if saving `stale` has failed
+        if saved is None or saved.refresh_token == stale.refresh_token or saved.expires_at <= stale.expires_at:
+            return False
+        self.token = saved
+        return True
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         if not self.logged_in or self.token is None:
             msg = "not logged in to MyAnimeList"
             raise MalAuthError(msg)
-        if self.token.expires_at - _EXPIRY_MARGIN < time.time():
-            await self._refresh(self.token)
+        now = time.time()
+        # no new attempt right after a failed one while the access token still works
+        backing_off = self.token.expires_at > now and now - self._refresh_failed_at < _REFRESH_RETRY_DELAY
+        if self.token.expires_at - _EXPIRY_MARGIN < now and not backing_off:
+            try:
+                await self._refresh(self.token)
+            except MalAuthError:
+                raise
+            except MalError:
+                self._refresh_failed_at = time.time()
+                # MAL or the network fails for a while: the token still works until it expires
+                if self.token is None or self.token.expires_at <= time.time():
+                    raise
+                logger.warning("MyAnimeList token refresh failed, the current one works for now", exc_info=True)
         for attempt in range(2):
             token = self.token
             if token is None:
@@ -388,17 +515,17 @@ class MalClient:
             except httpx.HTTPError as e:
                 msg = f"MyAnimeList is unavailable: {e}"
                 raise MalError(msg) from e
-            if resp.status_code == 401 and attempt == 0:
+            if resp.status_code == _HTTP_UNAUTHORIZED and attempt == 0:
                 await self._refresh(token)
                 continue
-            if resp.status_code == 401:
-                self.logout()
-                msg = "MyAnimeList session expired, log in again"
-                raise MalAuthError(msg)
-            if resp.status_code in (307, 429):
+            if resp.status_code == _HTTP_UNAUTHORIZED:
+                # MAL has just refreshed the token and still refuses it: its failure, the login is kept
+                msg = "MyAnimeList refused the request (401), try again later"
+                raise MalError(msg)
+            if resp.status_code in _RATE_LIMITED:
                 msg = f"MyAnimeList limits requests ({resp.status_code}), try again in a few minutes"
                 raise MalRateLimited(msg)
-            if resp.status_code >= 400:
+            if resp.status_code >= _HTTP_BAD_REQUEST:
                 msg = f"MyAnimeList error {resp.status_code}: {resp.text[:200]}"
                 raise MalError(msg)
             if not resp.content:
@@ -413,9 +540,8 @@ class MalClient:
     # --- anime ---------------------------------------------------------------------
 
     async def search(self, query: str, limit: int = 10) -> list[MalAnime]:
-        # MAL rejects queries shorter than 3 characters
         query = query.strip()[:64]
-        if len(query) < 3:
+        if len(query) < MIN_QUERY_LENGTH:
             return []
         data = await self._request(
             "GET", "/anime", params={"q": query, "limit": limit, "fields": ANIME_FIELDS, "nsfw": "true"}
@@ -441,10 +567,10 @@ class MalClient:
         except httpx.HTTPError as e:
             msg = f"MyAnimeList is unavailable: {e}"
             raise MalError(msg) from e
-        if resp.status_code == 404:
+        if resp.status_code == _HTTP_NOT_FOUND:
             msg = "MyAnimeList: no such user"
             raise MalError(msg)
-        if resp.status_code >= 400:
+        if resp.status_code >= _HTTP_BAD_REQUEST:
             msg = f"MyAnimeList error {resp.status_code}"
             raise MalError(msg)
         return resp.text
@@ -473,7 +599,9 @@ class MalClient:
             form["is_rewatching"] = "true" if is_rewatching else "false"
         data = await self._request("PATCH", f"/anime/{anime_id}/my_list_status", data=form)
         result = ListStatus.from_json(data)
-        assert result is not None
+        if result is None:
+            msg = "MyAnimeList answered without the list status, try again later"
+            raise MalError(msg)
         return result
 
     async def delete_list_status(self, anime_id: int) -> None:

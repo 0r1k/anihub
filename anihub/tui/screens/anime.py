@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from rich.table import Table
@@ -22,7 +22,7 @@ from anihub.common.mal import STATUSES, MalAnime, MalError
 
 from .. import mal, playback, posters, subtitles
 from ..i18n import localized_bindings, t
-from ..selection import parse_selection_mask
+from ..selection import episode_number, parse_selection_mask
 from ..widgets import EpisodeList, ItemList, Navigate, PlayerBar, stop_loading
 from .dialogs import ConfirmScreen
 from .mal_dialogs import EpisodesScreen, MalSearchScreen, ScoreScreen
@@ -60,7 +60,8 @@ class AnimeScreen(Screen[None]):
         Binding("D", "mal_remove", "Remove from MAL", show=False),
     ]
     # the poster sidebar is hidden on narrow terminals
-    HORIZONTAL_BREAKPOINTS: ClassVar[list[tuple[int, str]]] = [(0, "-narrow"), (110, "-wide")]
+    # typed as Textual declares it (not a ClassVar there)
+    HORIZONTAL_BREAKPOINTS: list[tuple[int, str]] | None = [(0, "-narrow"), (110, "-wide")]
 
     def __init__(self, item: Any, extractor_name: str, mal_hint: MalAnime | None = None) -> None:
         super().__init__()
@@ -203,11 +204,14 @@ class AnimeScreen(Screen[None]):
             episodes_list.highlighted = min(cursor or 0, len(episodes) - 1)
         self._refresh_watched()
 
-    @work(exclusive=True, group="anime")
+    # its own group: a refresh (F5) and the sources of the chosen episode do not cancel each other
+    @work(exclusive=True, group="sources")
     async def load_sources(self, indices: list[int]) -> None:
         sources_list: ItemList[BaseSource] = self.query_one("#sources", ItemList)
         sources_list.loading = True
-        first = self.episodes[indices[0]]
+        # the objects, not the positions: a refresh can replace the list meanwhile
+        chosen = [self.episodes[i] for i in indices]
+        first = chosen[0]
         try:
             sources = await first.a_get_sources()
         except Exception as e:
@@ -216,19 +220,35 @@ class AnimeScreen(Screen[None]):
         finally:
             stop_loading(sources_list)
 
+        if not (indices := self._positions(chosen)):
+            return  # the episode is gone after a refresh
         self.chosen = indices
         self._show_sources(list(sources), indices)
+        # other sites are matched by whole episode numbers
+        number = episode_number(first.ordinal)
+        foreign = self.foreign if number is not None else None
         if sources:
             sources_list.focus()
-        elif not self.foreign:
+        elif not foreign:
             self.notify(t("No sources available"), severity="warning", markup=False)
-        if self.foreign:
+        if foreign and number is not None:
             # own sources are shown at once, subtitles from other sites are appended when loaded
             sources_list.border_subtitle = t("loading subtitles from other sites…")
-            found = await subtitles.foreign_sources(self.foreign, int(first.ordinal))
+            found = await subtitles.foreign_sources(foreign, number)
+            if not (indices := self._positions(chosen)):
+                return
             self._show_sources([*sources, *found], indices, keep_highlight=True)
             if found and not sources:
                 sources_list.focus()
+
+    def _positions(self, episodes: Sequence[BaseEpisode]) -> list[int]:
+        """Positions of the episodes in the shown list: a refresh (F5) gives new objects with the same numbers."""
+        by_id = {id(ep): i for i, ep in enumerate(self.episodes)}
+        by_ordinal: dict[Any, int] = {}
+        for i, ep in enumerate(self.episodes):
+            by_ordinal.setdefault(ep.ordinal, i)
+        positions = (by_id.get(id(ep), by_ordinal.get(ep.ordinal)) for ep in episodes)
+        return [i for i in positions if i is not None]
 
     def _show_sources(self, sources: list[Any], indices: list[int], *, keep_highlight: bool = False) -> None:
         sources_list: ItemList[Any] = self.query_one("#sources", ItemList)
@@ -321,7 +341,9 @@ class AnimeScreen(Screen[None]):
         if count := len(episodes.selected):
             parts.append(t("marked {count}", count=count))
         if self.leaked:
-            numbers = ", ".join(str(ep.ordinal) for ep in sorted(self.leaked, key=lambda ep: int(ep.ordinal)))
+            numbers = ", ".join(
+                str(ep.ordinal) for ep in sorted(self.leaked, key=lambda ep: episode_number(ep.ordinal) or 0)
+            )
             parts.append(t("leak hidden: {episodes} (F2)", episodes=numbers))
         episodes.border_title = " · ".join(parts)
 
@@ -341,7 +363,8 @@ class AnimeScreen(Screen[None]):
             # play from the other site: its episodes with the same numbers
             site = choice.site
             item, extractor_name, anime = site.item, site.extractor_name, site.anime
-            episodes = [site.episodes[o] for o in (int(e.ordinal) for e in episodes) if o in site.episodes]
+            numbers = (episode_number(e.ordinal) for e in episodes)
+            episodes = [site.episodes[n] for n in numbers if n is not None and n in site.episodes]
         source = self._plain_source(choice)
         app, session = self.app, self.app.session
         # MAL progress belongs to this page's title whatever site plays it
@@ -382,7 +405,9 @@ class AnimeScreen(Screen[None]):
 
         async def confirm_next(title: str) -> bool:
             question = t("Play the next episodes starting from «{title}»?", title=title)
-            return bool(await app.push_screen_wait(ConfirmScreen(question, yes=t("Play"), no=t("Stop"))))
+            # a typed local: inside bool() mypy would expect Screen[object]
+            confirmed = await app.push_screen_wait(ConfirmScreen(question, yes=t("Play"), no=t("Stop")))
+            return bool(confirmed)
 
         async def run() -> None:
             result = await playback.play_batch(
@@ -429,7 +454,7 @@ class AnimeScreen(Screen[None]):
     def _range_submitted(self, event: Input.Submitted) -> None:
         episodes_list = self.query_one(EpisodeList)
         try:
-            mask = parse_selection_mask(event.value, len(self.episodes))
+            mask = parse_selection_mask(event.value, [ep.ordinal for ep in self.episodes])
         except ValueError as e:
             self.notify(str(e), severity="error", markup=False)
             return
@@ -569,7 +594,7 @@ class AnimeScreen(Screen[None]):
             episodes_list.replace_option_prompt_at_index(i, self._episode_label(episode))
         self._update_counter()
 
-    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:  # noqa: ARG002 (Textual's signature)
         if action in MAL_ACTIONS or action == "mal_link":
             if not self.app.session.mal.logged_in:
                 return False
@@ -665,7 +690,8 @@ class AnimeScreen(Screen[None]):
         if self.mal is not None:
             queries = [self.mal.title, *queries]
 
-        self.app.push_screen(MalSearchScreen(queries), self._mal_relink)
+        # a @work method: the callback starts the worker, Textual drops the Worker it returns
+        self.app.push_screen(MalSearchScreen(queries), self._mal_relink)  # type: ignore[arg-type]
 
     @work(group="mal")
     async def _mal_relink(self, chosen: MalAnime | None) -> None:
@@ -682,10 +708,11 @@ class AnimeScreen(Screen[None]):
             return
 
         question = t("Remove «{title}» from your MyAnimeList? The score and progress will be lost.", title=anime.title)
-        self.app.push_screen(ConfirmScreen(question, yes=t("Remove"), no=t("Cancel")), self._mal_remove)
+        # a @work method, as above
+        self.app.push_screen(ConfirmScreen(question, yes=t("Remove"), no=t("Cancel")), self._mal_remove)  # type: ignore[arg-type]
 
     @work(group="mal-update")
-    async def _mal_remove(self, confirmed: bool | None) -> None:
+    async def _mal_remove(self, confirmed: bool | None) -> None:  # noqa: FBT001 (the result of the screen)
         anime = self.mal
         if not confirmed or anime is None:
             return
@@ -766,8 +793,10 @@ class AnimeScreen(Screen[None]):
         if self.anime is None:
             return
         self._search_sites()
-        # players of the chosen episode, or of the first one
-        ordinal = int(self.episodes[self.chosen[0] if self.chosen else 0].ordinal) if self.episodes else 1
+        # players of the chosen episode, or of the first one; other sites are matched by whole numbers
+        chosen = [self.episodes[self.chosen[0]]] if self.chosen else []
+        numbers = (episode_number(ep.ordinal) for ep in [*chosen, *self.episodes])
+        ordinal = next((n for n in numbers if n is not None), 1)
         title = t("«{title}» on other sites", title=self.item.title)
         self._sites_screen = SitesScreen(title, self._site_searches, ordinal)
         self.app.push_screen(self._sites_screen, self._site_chosen)

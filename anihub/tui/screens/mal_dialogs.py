@@ -17,6 +17,7 @@ from textual.widgets.option_list import Option
 
 from anihub.common.mal import (
     APICONFIG_URL,
+    MIN_QUERY_LENGTH,
     REDIRECT_URI,
     SCORE_LABELS,
     AuthRequest,
@@ -31,6 +32,9 @@ from ..widgets import ItemList, Navigate, stop_loading
 
 if TYPE_CHECKING:
     from ..app import AnihubApp
+
+# digits 1-9 are scores, 0 is 10
+_SCORE_KEYS = frozenset("0123456789")
 
 
 @localized_bindings
@@ -64,7 +68,8 @@ class ScoreScreen(ModalScreen[int | None]):
         scores.focus()
 
     def on_key(self, event: events.Key) -> None:
-        if event.character and event.character.isdigit():
+        # not str.isdigit(): it takes "²" and "٣", which int() refuses
+        if event.character is not None and event.character in _SCORE_KEYS:
             event.stop()
             self.dismiss(int(event.character) or 10)
 
@@ -191,7 +196,9 @@ class MalSearchScreen(ModalScreen[MalAnime | None]):
         finally:
             stop_loading(results)
         results.empty_text = (
-            t("Nothing found for «{query}»", query=query) if len(query) >= 3 else t("At least 3 characters")
+            t("Nothing found for «{query}»", query=query)
+            if len(query) >= MIN_QUERY_LENGTH
+            else t("At least 3 characters")
         )
         results.set_items(found, [describe(i, with_status=True) for i in found])
         if found:
@@ -285,11 +292,16 @@ class MalLoginScreen(ModalScreen[str | None]):
 
     @work(exclusive=True, group="mal-login")
     async def finish(self, code: str) -> None:
+        client = self.app.session.mal
         try:
-            username = await self.app.session.mal.login(self.auth, code)
+            username = await client.login(self.auth, code)
         except MalError as e:
             self.notify(str(e), severity="error", markup=False)
             return
+        except OSError as e:
+            # logged in, but only until anihub exits
+            username = client.username
+            self.notify(t("Logged in, but the login is not saved: {error}", error=e), severity="warning", markup=False)
         self.workers.cancel_group(self, "mal-redirect")
         self.dismiss(username)
 

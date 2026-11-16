@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import random
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
@@ -12,6 +14,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.widgets import Button, Footer, Header, Input, OptionList, Select, TabbedContent, TabPane, Tabs
 
 from anihub.common import history, mal_links, ongoing_state
@@ -29,6 +32,7 @@ if TYPE_CHECKING:
     from ..app import AnihubApp
 
 
+logger = logging.getLogger(__name__)
 HistoryItem = tuple[dict[str, Any], Any]
 TAB_ORDER = ("search", "ongoing", "watching", "history", "mal", "feed")
 TAB_CONTENT = {
@@ -111,7 +115,7 @@ def _added(seconds: float, added: float) -> str:
     return time.strftime("%Y-%m-%d", time.localtime(added))
 
 
-def _feed_label(item: FeedItem, unread: bool, now: float) -> Text:
+def _feed_label(item: FeedItem, *, unread: bool, now: float) -> Text:
     text = Text()
     if unread:
         text.append(f" {t('NEW')} ", style="bold reverse")
@@ -130,15 +134,36 @@ def _links_by_mal_id() -> dict[int, dict[str, Any]]:
     """The latest link of every MAL entry, read once per list render."""
     links: dict[int, dict[str, Any]] = {}
     for link in mal_links.read():
-        links.setdefault(link.get("mal_id"), link)
+        # mal_links.json can be edited by hand: a link without an id is skipped, not to fail the render
+        if isinstance(mal_id := link.get("mal_id"), int):
+            links.setdefault(mal_id, link)
     return links
 
 
-def _mal_label(anime: MalAnime, with_status: bool, link: dict[str, Any] | None) -> Text:
+def _link_title(link: dict[str, Any]) -> str:
+    """The site title of the link, empty if the saved link is broken."""
+    data = link.get("data")
+    title = data.get("title") if isinstance(data, dict) else None
+    return title if isinstance(title, str) else ""
+
+
+def _mal_label(anime: MalAnime, *, with_status: bool, link: dict[str, Any] | None) -> Text:
     label = mal.describe(anime, with_status=with_status)
     if link:
-        label.append(f"\n↩ {link['extractor_name']}: {link['data']['title']}", style="dim")
+        label.append(f"\n↩ {link.get('extractor_name', '?')}: {_link_title(link)}", style="dim")
     return label
+
+
+@dataclass
+class _MalHint:
+    """The MAL entry searched on the site from the MAL tab, for the search results made for it.
+
+    It goes to the first opened result without a link, and only to it: the other results are other titles.
+    """
+
+    anime: MalAnime
+    # `history.item_key` of that result
+    key: str | None = None
 
 
 @localized_bindings
@@ -167,16 +192,24 @@ class HomeScreen(Screen[None]):
         self._ongoing: list[Any] = []
         # when a new episode of the title was noticed, by item url
         self._ongoing_updated: dict[str, float] = {}
+        # the sites the shown results come from: the source can be changed while they are shown
+        self._ongoing_extractor = self._search_extractor = ""
+        # the query of the shown search results
+        self._search_query = ""
         self._mal_loaded = False
         # the loaded MAL list (the status filter is applied by the API, the search on display)
         self._mal_items: list[MalAnime] = []
         self._watching_loaded = False
-        # MAL entry being searched on the site from the MAL tab: linked when a result is opened
-        self._mal_hint: MalAnime | None = None
+        # MAL entry the shown search results were searched for from the MAL tab: linked when a result is opened
+        self._mal_hint: _MalHint | None = None
+        # the hint of a search still running or failed: F5 repeats that search for the same MAL entry
+        self._pending_hint: tuple[str, _MalHint] | None = None
         # related titles not in the list (the API has no MAL notifications), loaded at start for the unread count
         self._feed: Feed | None = None
         self._feed_items: list[FeedItem] = []
         self._feed_loaded = False
+        # the planned reload of the notifications MAL has limited
+        self._feed_retry: Timer | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -242,15 +275,31 @@ class HomeScreen(Screen[None]):
             self.load_feed()
 
     def reset(self) -> None:
-        """Drop cached results after extractor or network settings change."""
-        self.query_one("#search-results", ItemList).set_items([])
-        self._ongoing_loaded = False
+        """Drop cached results after extractor or network settings change.
+
+        Their titles belong to the old site and http clients: loads still running are cancelled too, or they
+        would show them later.
+        """
+        self.workers.cancel_group(self, "search")
+        self.workers.cancel_group(self, "ongoing")
+        results = self.query_one("#search-results", ItemList)
+        results.empty_text = t("Type a query and press Enter")
+        results.border_title = ""
+        results.set_items([])
+        self._mal_hint = self._pending_hint = None
+        self._ongoing, self._ongoing_loaded = [], False
+        ongoing_results = self.query_one("#ongoing-results", ItemList)
+        ongoing_results.border_title = ""
+        ongoing_results.set_items([])
         if self.query_one(TabbedContent).active == "ongoing":
             self.load_ongoing()
         self.reset_mal()
 
     def reset_mal(self) -> None:
         """MAL account changed: reload the lists when the tab is shown."""
+        # loads of the old account would show its lists when they end
+        for group in ("mal", "watching", "feed"):
+            self.workers.cancel_group(self, group)
         self._mal_loaded = self._watching_loaded = self._feed_loaded = False
         active = self.query_one(TabbedContent).active
         if active == "mal":
@@ -347,7 +396,7 @@ class HomeScreen(Screen[None]):
     def action_find(self) -> None:
         self.query_one("#mal-query", Input).focus()
 
-    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:  # noqa: ARG002 (Textual's signature)
         # the list search is only on the MyAnimeList tab
         if action == "find":
             return self.query_one(TabbedContent).active == "mal"
@@ -366,27 +415,37 @@ class HomeScreen(Screen[None]):
         elif active == "feed":
             self.load_feed(force=True)
         elif query := self.query_one("#query", Input).value.strip():
-            self.search(query)
+            # the same search again: still for the MAL entry
+            hint = self._mal_hint if query == self._search_query else None
+            if hint is None and self._pending_hint and self._pending_hint[0] == query:
+                hint = self._pending_hint[1]
+            self.search(query, mal_hint=hint)
 
     # --- data ----------------------------------------------------------------
 
     @on(Input.Submitted, "#query")
     def _query_submitted(self, event: Input.Submitted) -> None:
         if query := event.value.strip():
-            self._mal_hint = None
             self.search(query)
 
     @work(exclusive=True, group="search")
-    async def search(self, query: str) -> None:
+    async def search(self, query: str, *, mal_hint: _MalHint | None = None) -> None:
+        """Search the site, `mal_hint`: the MAL entry searched for from the MAL tab."""
+        session = self.app.session
+        # kept apart from `_mal_hint`: the results still shown are not the ones it was meant for
+        self._pending_hint = (query, mal_hint) if mal_hint else None
+        # the results belong to this site even if the source is changed while it answers
+        extractor, extractor_name = session.extractor, session.settings.extractor_name
         results: ItemList = self.query_one("#search-results", ItemList)
         results.loading = True
         try:
-            items = await self.app.session.extractor.a_search(query)
+            items = await extractor.a_search(query)
         except Exception as e:
             self.notify(t("Search error: {error}", error=e), severity="error", markup=False)
             return
         finally:
             stop_loading(results)
+        self._search_extractor, self._search_query, self._mal_hint = extractor_name, query, mal_hint
         results.empty_text = t("Nothing found for «{query}»", query=query)
         results.set_items(items)
         results.border_title = t("Results: {count}", count=len(items)) if items else ""
@@ -395,17 +454,21 @@ class HomeScreen(Screen[None]):
 
     @work(exclusive=True, group="ongoing")
     async def load_ongoing(self) -> None:
+        session = self.app.session
+        # the titles belong to this site even if the source is changed while it answers
+        extractor, extractor_name = session.extractor, session.settings.extractor_name
         results: ItemList = self.query_one("#ongoing-results", ItemList)
         results.loading = True
         try:
-            items = await self.app.session.extractor.a_ongoing()
+            items = await extractor.a_ongoing()
         except Exception as e:
             self.notify(t("Failed to load ongoing: {error}", error=e), severity="error", markup=False)
             return
         finally:
             stop_loading(results)
         self._ongoing_loaded = True
-        self._ongoing_updated = ongoing_state.track(self.app.session.settings.extractor_name, items, ongoing.mark)
+        self._ongoing_extractor = extractor_name
+        self._ongoing_updated = ongoing_state.track(extractor_name, items, ongoing.mark)
         # titles with new episodes on top, the rest in the site order (sorted() is stable)
         self._ongoing = sorted(items, key=lambda i: -self._ongoing_updated.get(history.item_key(i), 0))
         self._show_ongoing()
@@ -486,7 +549,7 @@ class HomeScreen(Screen[None]):
             items = [
                 a
                 for a in items
-                if mal.matches(mal.search_text(a, links[a.id]["data"]["title"] if a.id in links else ""), query)
+                if mal.matches(mal.search_text(a, _link_title(links[a.id]) if a.id in links else ""), query)
             ]
         current = results.current
         results.empty_text = (
@@ -494,7 +557,7 @@ class HomeScreen(Screen[None]):
             if query and self._mal_items
             else t("No titles with this status")
         )
-        results.set_items(items, [_mal_label(i, with_status, links.get(i.id)) for i in items])
+        results.set_items(items, [_mal_label(i, with_status=with_status, link=links.get(i.id)) for i in items])
         if current in items:
             results.highlighted = items.index(current)
         username = self.app.session.mal.username
@@ -510,7 +573,7 @@ class HomeScreen(Screen[None]):
         if not len(items):
             self.notify(t("No titles with this status"), markup=False)
             return
-        self.open_mal_anime(random.choice(items))
+        self.open_mal_anime(random.choice(items))  # noqa: S311 (a title to watch, not a secret)
 
     @on(Input.Changed, "#mal-query")
     def _mal_query_changed(self) -> None:
@@ -572,6 +635,10 @@ class HomeScreen(Screen[None]):
 
     @work(exclusive=True, group="feed")
     async def load_feed(self, *, force: bool = False) -> None:
+        # this load replaces the planned one: one retry at a time, however often F5 is pressed
+        if self._feed_retry is not None:
+            self._feed_retry.stop()
+            self._feed_retry = None
         results: FeedList = self.query_one(FeedList)
         client = self.app.session.mal
         if not client.logged_in:
@@ -605,7 +672,7 @@ class HomeScreen(Screen[None]):
         )
         if self._feed.limited:
             # MAL lifts the limit in a few minutes: go on from where the check stopped
-            self.set_timer(RETRY_AFTER, self.load_feed)
+            self._feed_retry = self.set_timer(RETRY_AFTER, self.load_feed)
         self._show_feed()
         self.focus_loaded("feed")
 
@@ -614,7 +681,8 @@ class HomeScreen(Screen[None]):
         feed, items = self._feed, self._feed_items
         current = results.current
         now = time.time()
-        results.set_items(items, [_feed_label(i, feed is not None and feed.is_unread(i), now) for i in items])
+        labels = [_feed_label(i, unread=feed is not None and feed.is_unread(i), now=now) for i in items]
+        results.set_items(items, labels)
         if current in items:
             results.highlighted = items.index(current)
         unread = sum(1 for i in items if feed is not None and feed.is_unread(i))
@@ -678,10 +746,28 @@ class HomeScreen(Screen[None]):
     @on(OptionList.OptionSelected, "#search-results, #ongoing-results")
     def _open_result(self, event: OptionList.OptionSelected) -> None:
         items = event.option_list.items  # type: ignore[attr-defined]
-        if items:
-            item = items[event.option_index]
-            hint = self._mal_hint if event.option_list.id == "search-results" else None
-            self.open_title(item, self.app.session.settings.extractor_name, mal_hint=hint)
+        if not items:
+            return
+        item = items[event.option_index]
+        if event.option_list.id == "search-results":
+            extractor_name = self._search_extractor
+            hint = self._take_mal_hint(item, extractor_name)
+        else:
+            extractor_name, hint = self._ongoing_extractor, None
+        self.open_title(item, extractor_name, mal_hint=hint)
+
+    def _take_mal_hint(self, item: Any, extractor_name: str) -> MalAnime | None:
+        """The MAL entry of the search for the opened result: the first one opened without a link takes it."""
+        hint = self._mal_hint
+        if hint is None:
+            return None
+        key = history.item_key(item)
+        if hint.key is None:
+            # linked already: the title keeps its link, the hint waits for the result it was meant for
+            if mal_links.get(item, extractor_name) is not None:
+                return None
+            hint.key = key
+        return hint.anime if hint.key == key else None
 
     @on(OptionList.OptionSelected, "#mal-results")
     def _open_mal(self, event: OptionList.OptionSelected) -> None:
@@ -715,16 +801,16 @@ class HomeScreen(Screen[None]):
                 item = mal_links.restore(link, session.http_kwargs)
             except Exception:
                 # the extractor of the link was removed or changed its models: search again
-                self.log.warning(f"broken MAL link: {link}")
+                logger.warning("broken MAL link %r", link, exc_info=True)
             else:
                 self.open_title(item, link["extractor_name"])
                 return
         # never watched in anihub: search on the current site, the opened result gets linked
-        query = mal.search_queries(anime.all_titles, limit=1)
-        self._mal_hint = anime
+        queries = mal.search_queries(anime.all_titles, limit=1)
+        query = (queries[0] if queries else anime.title).strip()
         self.action_show_tab("search")
-        self.query_one("#query", Input).value = query[0] if query else anime.title
-        self.search(self.query_one("#query", Input).value)
+        self.query_one("#query", Input).value = query
+        self.search(query, mal_hint=_MalHint(anime))
         self.notify(
             t("Pick «{title}» in the search results: it will be linked to MyAnimeList", title=anime.title),
             markup=False,
@@ -742,7 +828,7 @@ class HomeScreen(Screen[None]):
             return
         entry, item = results.items[event.option_index]
 
-        def open_title(resume: bool | None) -> None:
+        def open_title(resume: bool | None) -> None:  # noqa: FBT001 (the result of the screen)
             if resume:
                 key = history.entry_key(entry)
                 self.app.play(

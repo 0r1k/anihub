@@ -6,11 +6,18 @@ translation falls back to English. Use `t("Text {name}", name=...)` for formatte
 
 from __future__ import annotations
 
+import inspect
+import logging
+from collections.abc import Callable
 from dataclasses import replace
-from typing import Any
+from typing import Any, TypeVar
 
-from textual.binding import Binding
+from textual.binding import ActiveBinding
 from textual.dom import DOMNode
+from textual.screen import Screen
+
+logger = logging.getLogger(__name__)
+NodeT = TypeVar("NodeT", bound=DOMNode)
 
 DEFAULT_LANGUAGE = "en"
 LANGUAGES = {"en": "English", "uk": "Українська"}
@@ -21,6 +28,17 @@ UK: dict[str, str] = {
     "Stop": "Стоп",
     "Quit": "Вихід",
     "Playback error: {error}": "Помилка відтворення: {error}",
+    "Wrong player arguments: {error}. Fix them in settings (F2)": (
+        "Неправильні аргументи плеєра: {error}. Виправте їх у налаштуваннях (F2)"
+    ),
+    "The player could not play «{title}». Try another player": (
+        "Плеєр не зміг відтворити «{title}». Спробуйте інший плеєр"
+    ),
+    "The site returned a wrong video link. Try another player": (
+        "Сайт повернув неправильне посилання на відео. Спробуйте інший плеєр"
+    ),
+    "Not an episode number: {parts}": "Не номер серії: {parts}",
+    "No such episodes in the list: {parts}": "Таких серій немає у списку: {parts}",
     "Update available": "Доступне оновлення",
     "Run `anihub update` to upgrade": "Оновіть: anihub update",
     "Update anihub": "Оновити anihub",
@@ -32,6 +50,10 @@ UK: dict[str, str] = {
     "Later": "Пізніше",
     "Player not found: {command}. Choose another one in settings (F2)": (
         "Плеєр не знайдено: {command}. Оберіть інший у налаштуваннях (F2)"
+    ),
+    "Damaged file": "Пошкоджений файл",
+    "{file} was damaged and is reset. The damaged copy is kept next to it: {moved}": (
+        "{file} пошкоджено і скинуто. Пошкоджену копію збережено поруч: {moved}"
     ),
     # home
     "Search": "Пошук",
@@ -102,7 +124,14 @@ UK: dict[str, str] = {
     "Local video proxy (reconnects on connection drops)": "Локальний проксі для відео (перепідключення при обривах)",
     "Episodes per player playlist": "Серій в одному плейлисті плеєра",
     "Proxy for sites": "Проксі для сайтів",
-    "format: scheme://user:password@host:port": "формат: scheme://user:password@host:port",
+    "format: scheme://user:password@host:port, scheme: {schemes}": (
+        "формат: scheme://user:password@host:port, scheme: {schemes}"
+    ),
+    "Network settings not applied: {error}": "Налаштування мережі не застосовано: {error}",
+    "The saved proxy is not used, anihub connects directly: {error}. Fix it in settings (F2)": (
+        "Збережений проксі не використовується, anihub підключається напряму: {error}. "
+        "Виправте його в налаштуваннях (F2)"
+    ),
     "HTTP timeout, seconds": "Тайм-аут HTTP, секунд",
     "Fix the highlighted fields": "Виправте виділені поля",
     "Settings applied but not saved: {error}": "Налаштування застосовано, але не збережено: {error}",
@@ -148,6 +177,18 @@ UK: dict[str, str] = {
     "The episode is not counted on MyAnimeList: link the title first (l on the title page)": (
         "Серію не зараховано на MyAnimeList: спочатку прив'яжіть тайтл (l на сторінці тайтла)"
     ),
+    "The episode is not counted on MyAnimeList: {error}": "Серію не зараховано на MyAnimeList: {error}",
+    "Episode «{episode}» is not counted on MyAnimeList: it counts episodes 1, 2, 3… "
+    "Set the watched episodes on the title page (e)": (
+        "Серію «{episode}» не зараховано на MyAnimeList: там рахують серії 1, 2, 3… "
+        "Вкажіть кількість переглянутих серій на сторінці тайтла (e)"
+    ),
+    "Episode {episode} is not counted on MyAnimeList: «{title}» has {total} episodes there. "
+    "Check the link on the title page (l)": (
+        "Серію {episode} не зараховано на MyAnimeList: у «{title}» там {total} серій. "
+        "Перевірте прив'язку на сторінці тайтла (l)"
+    ),
+    "Logged in, but the login is not saved: {error}": "Вхід виконано, але його не збережено: {error}",
     "{error}. Log in again in settings (F2)": "{error}. Увійдіть знову в налаштуваннях (F2)",
     "You have watched «{title}» to the end. Rate it on MyAnimeList?": (
         "Ви додивилися «{title}» до кінця. Поставити оцінку на MyAnimeList?"
@@ -318,8 +359,8 @@ UK: dict[str, str] = {
 CATALOGS: dict[str, dict[str, str]] = {"en": {}, "uk": UK}
 
 _language = DEFAULT_LANGUAGE
-# classes with translatable binding descriptions, in definition order (parents first)
-_localized: list[tuple[type[DOMNode], list[Binding]]] = []
+# `active_bindings` getters that translate: a decorated screen inheriting from a decorated one translates once
+_translating: set[Callable[[Any], dict[str, ActiveBinding]]] = set()
 
 
 def get_language() -> str:
@@ -327,14 +368,9 @@ def get_language() -> str:
 
 
 def set_language(code: str) -> None:
-    """Switch language and re-translate binding descriptions of the registered classes."""
-    global _language
+    """Switch the language of the texts made from now on and of the footer as it is redrawn (`refresh_bindings`)."""
+    global _language  # noqa: PLW0603
     _language = code if code in CATALOGS else DEFAULT_LANGUAGE
-    for cls, source in _localized:
-        cls.BINDINGS = [replace(b, description=t(b.description)) if b.description else b for b in source]
-    # merged bindings include parent bindings, so rebuild after all classes are updated
-    for cls, _ in _localized:
-        cls._merged_bindings = cls._merge_bindings()
 
 
 def t(text: str, **kwargs: Any) -> str:
@@ -342,8 +378,37 @@ def t(text: str, **kwargs: Any) -> str:
     return translated.format(**kwargs) if kwargs else translated
 
 
-def localized_bindings(cls: type[DOMNode]) -> type[DOMNode]:
-    """Class decorator: BINDINGS descriptions are English source strings translated by `set_language`."""
-    source = [b if isinstance(b, Binding) else Binding(*b) for b in cls.__dict__.get("BINDINGS", [])]
-    _localized.append((cls, source))
+def localized_bindings(cls: type[NodeT]) -> type[NodeT]:
+    """Class decorator: BINDINGS descriptions are English source strings, translated where they are shown.
+
+    Textual shows bindings (the footer, the keys panel) from `Screen.active_bindings`: a decorated screen
+    translates there all it shows, its own bindings, the app's and the focused widgets', in the current language.
+    BINDINGS themselves are not touched: Textual merges them once, when the class is created.
+    """
+    if issubclass(cls, Screen):
+        _translate_shown_bindings(cls)
     return cls
+
+
+def _translate_shown_bindings(screen: type[Screen[Any]]) -> None:
+    shown = inspect.getattr_static(screen, "active_bindings", None)
+    getter = shown.fget if isinstance(shown, property) else None
+    if getter is None:
+        # Textual gives bindings to the footer another way now: they stay in English, nothing breaks
+        logger.warning("cannot translate the key bindings of %s: Textual has changed", screen.__name__)
+        return
+    if getter in _translating:
+        return
+
+    def active_bindings(self: Screen[Any]) -> dict[str, ActiveBinding]:
+        return {key: _translated(active) for key, active in getter(self).items()}
+
+    _translating.add(active_bindings)
+    screen.active_bindings = property(active_bindings, doc=shown.__doc__)  # type: ignore[method-assign, assignment]
+
+
+def _translated(active: ActiveBinding) -> ActiveBinding:
+    binding = active.binding
+    if not binding.description:
+        return active
+    return active._replace(binding=replace(binding, description=t(binding.description)))

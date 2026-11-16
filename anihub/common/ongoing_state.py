@@ -7,13 +7,13 @@ and goes to the top. The first load of a site only records the state (nothing is
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
+from anihub.common import storage
 from anihub.common.config import get_data_dir
 from anihub.common.history import item_key
 
@@ -29,19 +29,14 @@ def _path() -> Path:
 
 
 def _read() -> dict[str, Any]:
-    try:
-        data = json.loads(_path().read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
-    except (OSError, ValueError):
-        logger.warning("broken ongoing state %s, start over", _path(), exc_info=True)
-        return {}
-    return data if isinstance(data, dict) else {}
+    # a broken file is moved aside (see storage): starting over only means no NEW marks on this load
+    return storage.read_json(_path(), {})
 
 
 def _write(data: dict[str, Any]) -> None:
+    # logged, not raised: the ongoing list is shown anyway, the marks are only not remembered
     try:
-        _path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        storage.write_json(_path(), data, indent=2)
     except OSError:
         logger.warning("failed to save ongoing state", exc_info=True)
 
@@ -69,5 +64,7 @@ def track(
 
     titles = {url: e for url, e in titles.items() if now - e.get("last_seen", now) < FORGET_AFTER}
     data[extractor_name] = {"titles": titles}
+    # counts of the Watching tab were here before 8.3: they live in watching.json now
+    data.pop("@watching", None)
     _write(data)
     return {url: float(e.get("updated_at") or 0) for url, e in titles.items()}

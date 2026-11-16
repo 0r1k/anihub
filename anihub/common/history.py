@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import TYPE_CHECKING, Any
 
 import attr
 
+from anihub.common import storage
 from anihub.common.config import get_history_path
 from anihub.common.extractors import dynamic_load_extractor_module
 
@@ -16,21 +16,31 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 HISTORY_LIMIT = 50
+# the last write failed: the player saves the position every few seconds, one warning per failure is enough
+_write_failed = False
 
 
 def read() -> list[dict[str, Any]]:
-    """Read raw history entries."""
-    try:
-        with get_history_path().open(encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return []
-    return data if isinstance(data, list) else []
+    """Read raw history entries. A broken file is moved aside (see storage), not overwritten by the next write."""
+    entries: list[Any] = storage.read_json(get_history_path(), [])
+    return [entry for entry in entries if isinstance(entry, dict)]
 
 
 def _write(entries: list[dict[str, Any]]) -> None:
-    with get_history_path().open("w", encoding="utf-8") as f:
-        json.dump(entries, f, ensure_ascii=False, indent=4)
+    """Replace the file atomically: a crash or power loss while watching leaves the previous history.
+
+    A failure (no space, no permission, a value of a site that is not JSON) is logged, not raised: the history
+    must not stop the playback or crash a screen.
+    """
+    global _write_failed  # noqa: PLW0603
+    try:
+        storage.write_json(get_history_path(), entries)
+    except (OSError, TypeError, ValueError):
+        if not _write_failed:
+            logger.warning("failed to save the history", exc_info=True)
+        _write_failed = True
+    else:
+        _write_failed = False
 
 
 def _public_fields(item: Any) -> dict[str, Any]:

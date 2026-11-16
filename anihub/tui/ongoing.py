@@ -87,12 +87,16 @@ def mark(item: Any) -> str:
     return f"str:{item}"
 
 
+_HOUR = 3600
+_DAY = 24 * _HOUR
+
+
 def ago(seconds: float) -> str:
-    if seconds < 3600:
+    if seconds < _HOUR:
         return t("{count} min ago", count=max(1, int(seconds // 60)))
-    if seconds < 24 * 3600:
-        return t("{count} h ago", count=int(seconds // 3600))
-    return t("{count} d ago", count=int(seconds // (24 * 3600)))
+    if seconds < _DAY:
+        return t("{count} h ago", count=int(seconds // _HOUR))
+    return t("{count} d ago", count=int(seconds // _DAY))
 
 
 def premiere(item: Any) -> datetime | None:

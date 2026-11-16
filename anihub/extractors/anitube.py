@@ -333,7 +333,8 @@ class Anime(BaseAnime):
         if not payload.get("success"):
             return []
         return [
-            Episode(title=e["title"], ordinal=e["ordinal"], sources=e["sources"], **self._kwargs_http)
+            # title and ordinal are attrs fields of BaseEpisode, which mypy cannot see (anicli-api is untyped)
+            Episode(title=e["title"], ordinal=e["ordinal"], sources=e["sources"], **self._kwargs_http)  # type: ignore[call-arg]
             for e in _parse_playlists(payload.get("response", ""), self.data.get("episodes_text", ""))
         ]
 
@@ -353,7 +354,8 @@ class Episode(BaseEpisode):
     sources: list[dict[str, str]] = field(factory=list)
 
     def get_sources(self) -> list[Source]:
-        return [Source(title=s["title"], url=s["url"], **self._kwargs_http) for s in self.sources]
+        # title and url are attrs fields of BaseSource (see Anime._episodes)
+        return [Source(title=s["title"], url=s["url"], **self._kwargs_http) for s in self.sources]  # type: ignore[call-arg]
 
     async def a_get_sources(self) -> list[Source]:
         return self.get_sources()

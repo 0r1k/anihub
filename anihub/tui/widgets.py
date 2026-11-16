@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterable
-from typing import Any, ClassVar, Generic, TypeVar
+from typing import Any, ClassVar, Generic, TypeVar, cast
 
 from rich.segment import Segment
 from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal
 from textual.dom import NoScreen
 from textual.message import Message
@@ -49,28 +49,32 @@ class Navigate(Message):
 class _EdgeNavigation:
     """Lists do not wrap around: up on the first item and left/right post `Navigate` instead."""
 
-    NAV_BINDINGS: ClassVar[list[Binding]] = [
+    NAV_BINDINGS: ClassVar[list[BindingType]] = [
         Binding("up,k", "cursor_up", show=False),
         Binding("down,j", "cursor_down", show=False),
         Binding("left", "navigate('left')", show=False),
         Binding("right", "navigate('right')", show=False),
     ]
 
+    # mixed into OptionList subclasses only: `self` is one, typed as such
     def action_cursor_up(self) -> None:
-        if self.highlighted in (None, 0):  # type: ignore[attr-defined]
-            self.post_message(Navigate(self, "up"))  # type: ignore[attr-defined, arg-type]
+        options = cast("OptionList", self)
+        if options.highlighted is None or options.highlighted == 0:
+            options.post_message(Navigate(options, "up"))
         else:
-            self.highlighted -= 1  # type: ignore[attr-defined]
+            options.highlighted -= 1
 
     def action_cursor_down(self) -> None:
-        if self.highlighted is None:  # type: ignore[attr-defined]
-            if self.option_count and not self.get_option_at_index(0).disabled:  # type: ignore[attr-defined]
-                self.highlighted = 0
-        elif self.highlighted < self.option_count - 1:  # type: ignore[attr-defined]
-            self.highlighted += 1
+        options = cast("OptionList", self)
+        if options.highlighted is None:
+            if options.option_count and not options.get_option_at_index(0).disabled:
+                options.highlighted = 0
+        elif options.highlighted < options.option_count - 1:
+            options.highlighted += 1
 
     def action_navigate(self, direction: str) -> None:
-        self.post_message(Navigate(self, direction))  # type: ignore[attr-defined, arg-type]
+        options = cast("OptionList", self)
+        options.post_message(Navigate(options, direction))
 
 
 class ItemList(_EdgeNavigation, OptionList, Generic[T]):

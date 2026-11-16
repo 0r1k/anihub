@@ -1,5 +1,9 @@
 from urllib.parse import urlsplit, urlunsplit
 
+# what httpx connects through (socksio comes with anicli-api): an unknown scheme makes it raise on client creation
+PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
+_SCHEMES_TEXT = f"{', '.join(PROXY_SCHEMES[:-1])} or {PROXY_SCHEMES[-1]}"
+
 
 def is_arabic_digit(s: str) -> bool:
     # str.isdigit() returns True for all number-like Unicode chars
@@ -10,52 +14,47 @@ def is_arabic_digit(s: str) -> bool:
     return s.isascii() and s.isdigit()
 
 
-def is_arabic_slice(s: str, sep: str = "-") -> bool:
-    """Check if a string is a valid 'start-end' numeric range."""
-    parts = [p.strip() for p in s.split(sep, 1)]
-    if len(parts) != 2:
-        return False
-    return is_arabic_digit(parts[0]) and is_arabic_digit(parts[1])
-
-
-def str_to_slice(s: str, sep: str = "-") -> slice:
-    """Convert '1-10' string to a Python slice object."""
-    parts = [p.strip() for p in s.split(sep, 1)]
-    if len(parts) != 2 or not all(is_arabic_digit(p) for p in parts):
-        raise TypeError(f"'{s}' is not a valid arabic slice (e.g. '1-10')")
-
-    return slice(int(parts[0]), int(parts[1]))
-
-
 def validate_proxy_url(value: str) -> str:
     """
     Validate proxy URL.
 
-    Expected formats:
+    Expected formats (scheme: one of PROXY_SCHEMES):
       - scheme://user:password@host:port
       - scheme://host:port
 
     Raises:
-        ValueError: if the URL is invalid or missing required parts.
+        ValueError: if the URL is invalid, missing required parts or httpx cannot use it.
     Returns:
-        str: normalized URL if valid.
+        str: normalized URL if valid, the one to give the http clients.
     """
     parts = urlsplit(value)
 
-    if not parts.scheme:
-        raise ValueError("Missing proxy scheme (e.g., http, https, socks5)")
+    if not parts.scheme or not parts.netloc:
+        msg = f"Missing proxy scheme ({_SCHEMES_TEXT})"
+        raise ValueError(msg)
+    if parts.scheme not in PROXY_SCHEMES:
+        msg = f"Unsupported proxy scheme {parts.scheme!r}, use {_SCHEMES_TEXT}"
+        raise ValueError(msg)
     if not parts.hostname:
-        raise ValueError("Missing proxy hostname")
+        msg = "Missing proxy hostname"
+        raise ValueError(msg)
     if parts.port is None:
-        raise ValueError("Missing proxy port")
+        msg = "Missing proxy port"
+        raise ValueError(msg)
 
     # urlunsplit requires a 5-tuple: (scheme, netloc, path, query, fragment)
-    # Reconstructing netloc ensures user:pass@host:port format is correct
-    netloc = f"{parts.hostname}:{parts.port}"
-    if parts.username:
-        userinfo = parts.username
-        if parts.password:
-            userinfo += f":{parts.password}"
-        netloc = f"{userinfo}@{netloc}"
+    # user info is kept as typed (percent-encoded or not), an IPv6 host gets its brackets back
+    userinfo, _, _ = parts.netloc.rpartition("@")
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    netloc = f"{userinfo}@{host}:{parts.port}" if userinfo else f"{host}:{parts.port}"
+    url = urlunsplit((parts.scheme, netloc, "", "", ""))
 
-    return urlunsplit((parts.scheme, netloc, "", "", ""))
+    # httpx parses stricter than urllib (control characters, hosts): ask the parser that will get the URL.
+    # Imported here: httpx takes as long to import as the whole command line interface
+    import httpx  # noqa: PLC0415
+
+    try:
+        httpx.Proxy(url)
+    except (ValueError, httpx.InvalidURL) as e:
+        raise ValueError(str(e)) from e
+    return url

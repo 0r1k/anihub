@@ -12,7 +12,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from anihub.common.m3u import generate_m3u_str_playlist
+from anihub.common.m3u import checked_url, generate_m3u_str_playlist, one_line
 
 if TYPE_CHECKING:
     from anicli_api.player.base import Video
@@ -24,6 +24,18 @@ class PlayerNotFoundError(FileNotFoundError):
     def __init__(self, command: str) -> None:
         super().__init__(command)
         self.command = command
+
+
+class PlayerArgsError(ValueError):
+    """The player command or arguments of the settings cannot be split (an unclosed quote)."""
+
+
+class PlayerFailedError(Exception):
+    """The player could not play the video (a dead link, an unsupported format)."""
+
+    def __init__(self, title: str) -> None:
+        super().__init__(title)
+        self.title = title
 
 
 IS_WINDOWS = os.name == "nt"
@@ -44,11 +56,37 @@ _KNOWN_LOCATIONS = {
 }
 
 
-def split_args(text: str) -> list[str]:
+def _split_windows(text: str) -> list[str]:
+    """Windows rules without escapes: double quotes group spaces anywhere in an argument and are removed."""
+    args: list[str] = []
+    current: list[str] = []
+    quoted = started = False
+    for char in text:
+        if char == '"':
+            quoted = not quoted
+            started = True
+        elif char.isspace() and not quoted:
+            if started:
+                args.append("".join(current))
+                current, started = [], False
+        else:
+            current.append(char)
+            started = True
+    if quoted:
+        msg = "No closing quotation"
+        raise ValueError(msg)
+    if started:
+        args.append("".join(current))
+    return args
+
+
+def split_args(text: str, *, windows: bool = IS_WINDOWS) -> list[str]:
     """Command line arguments. On Windows backslashes are path separators, not escapes."""
-    if IS_WINDOWS:
-        return [part.strip('"') for part in shlex.split(text, posix=False)]
-    return shlex.split(text)
+    try:
+        return _split_windows(text) if windows else shlex.split(text)
+    except ValueError as e:
+        msg = f"{e}: {text}"
+        raise PlayerArgsError(msg) from e
 
 
 def split_command(command: str) -> list[str]:
@@ -72,16 +110,31 @@ def resolve_executable(name: str) -> str | None:
     return None
 
 
-def is_installed(command: str) -> bool:
+def resolve_command(command: str) -> list[str]:
+    """Player command to argv with the full path of the program.
+
+    PlayerArgsError: the command cannot be split (an unclosed quote), PlayerNotFoundError: there is no such program.
+    """
     parts = split_command(command)
-    return bool(parts) and resolve_executable(parts[0]) is not None
+    executable = resolve_executable(parts[0]) if parts else None
+    if executable is None:
+        raise PlayerNotFoundError(command)
+    return [executable, *parts[1:]]
+
+
+def is_installed(command: str) -> bool:
+    try:
+        resolve_command(command)
+    except (PlayerArgsError, PlayerNotFoundError):
+        return False
+    return True
 
 
 class BasePlayer:
     """External video player running one video or a m3u playlist.
 
-    `play()` returns True if playback reached the end, False if the user closed the player
-    before the end, None if the player cannot report it.
+    `play()` returns True if playback reached the end of the last video (or the user skipped it), False if the user
+    closed the player before, None if the player cannot report it. PlayerFailedError: the last video failed to play.
 
     `on_watched(title)` is called once per video watched almost to the end, if the player can track it:
     `watched` holds titles reported so far.
@@ -143,40 +196,52 @@ class BasePlayer:
         return {k.lower(): v for k, v in self.videos[0].headers.items()}
 
     async def play(self) -> bool | None:
-        if not is_installed(self.command):
-            raise PlayerNotFoundError(self.command)
+        # an unclosed quote in the command is PlayerArgsError: installing a player would not fix it
+        resolve_command(self.command)
         if len(self.videos) == 1:
-            return await self.run(self.build_args(self.videos[0].url))
+            # a link from the site is the last argument: "--script=..." would be taken for an option
+            return await self._play_target(checked_url(self.videos[0].url))
 
+        playlist = generate_m3u_str_playlist(self.videos, self.titles)
         with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".m3u", encoding="utf-8") as f:
-            f.write(generate_m3u_str_playlist(self.videos, self.titles))
+            f.write(playlist)
             playlist_path = Path(f.name)
         try:
-            return await self.run(self.build_args(str(playlist_path)))
+            return await self._play_target(str(playlist_path))
         finally:
             playlist_path.unlink(missing_ok=True)
 
+    async def _play_target(self, target: str) -> bool | None:
+        try:
+            return await self.run(self.build_args(target))
+        finally:
+            # any failure or cancellation: no player left behind (Windows cannot delete an open playlist)
+            await self.terminate()
+
     async def _spawn(self, args: list[str]) -> None:
-        cmd = split_command(self.command)
-        cmd[0] = resolve_executable(cmd[0]) or cmd[0]
+        cmd = resolve_command(self.command)
         logger.debug("Executing: %s", shlex.join([*cmd, *args]))
         # player output must not leak into the terminal: it breaks TUI rendering
         self.process = await create_subprocess_exec(*cmd, *args, stdin=DEVNULL, stdout=DEVNULL, stderr=DEVNULL)
 
     async def _wait(self) -> None:
-        assert self.process
-        try:
+        if self.process:
             await self.process.wait()
-        except asyncio.CancelledError:
-            await self.terminate()
-            raise
 
-    async def terminate(self) -> None:
-        if self.process and self.process.returncode is None:
+    async def terminate(self, timeout: float = 3) -> None:
+        """Stop the player if it still runs: politely, then kill it if it hangs."""
+        process = self.process
+        if process is None or process.returncode is not None:
+            return
+        with contextlib.suppress(ProcessLookupError):
+            process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout)
+        except asyncio.TimeoutError:
             with contextlib.suppress(ProcessLookupError):
-                self.process.terminate()
+                process.kill()
             with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self.process.wait(), 3)
+                await asyncio.wait_for(process.wait(), timeout)
 
 
 class VLCPlayer(BasePlayer):
@@ -185,13 +250,13 @@ class VLCPlayer(BasePlayer):
     def build_args(self, target: str) -> list[str]:
         args = ["--play-and-exit"]
         if user_agent := self.headers.get("user-agent"):
-            args.append(f"--http-user-agent={user_agent}")
+            args.append(f"--http-user-agent={one_line(user_agent)}")
         if referer := self.headers.get("referer"):
-            args.append(f"--http-referrer={referer}")
+            args.append(f"--http-referrer={one_line(referer)}")
         if self.start:
             args.append(f"--start-time={self.start}")
         if len(self.videos) == 1:
-            args.append(f"--meta-title={self.titles[0]}")
+            args.append(f"--meta-title={one_line(self.titles[0])}")
         return [*args, *split_args(self.args), target]
 
 

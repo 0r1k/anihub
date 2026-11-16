@@ -1,21 +1,26 @@
 """The Watching tab: MyAnimeList "watching" titles with new episodes on top, like the ongoing tab.
 
 For every linked title the site of the link is asked how many episodes it has; more than watched on MAL
-means new episodes. When the available count grows, the time is remembered (ongoing_state, "@watching"),
-so the latest releases go first.
+means new episodes. When the count of the site grows, the time is remembered (watching.json), so the latest
+releases go first and are marked NEW.
+
+NEW means an episode came out: a count seen for the first time (a title new in the list, a new link, the first
+check that did not fail) is only remembered. The counts with and without the leaked episodes are remembered
+apart, so turning the setting on is not a release either.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 
-from anihub.common import mal_links, ongoing_state
+from anihub.common import mal_links, storage
+from anihub.common.config import get_data_dir
 from anihub.common.episodes import split_leaked
 from anihub.common.history import item_key
 
@@ -24,19 +29,24 @@ from .i18n import t
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
     from anihub.common.mal import MalAnime
 
     from .session import Session
 
-STATE_KEY = "@watching"
+logger = logging.getLogger(__name__)
 SITE_TIMEOUT = 20
 # parallel requests to the sites
 CONCURRENCY = 6
 # available episodes are cached: returning from the title page should not ask all sites again
 CACHE_TTL = 600
-# (time, (the last episode, the last one without leaked episodes))
+# (time.time(), `Entry.counts`) by (extractor name, item key)
 _cache: dict[tuple[str, str], tuple[float, tuple[int, int]]] = {}
+# the counts of a link not checked for this long are forgotten: the title left the list or got another link
+FORGET_AFTER = 90 * 24 * 3600
+# names of `Entry.counts` in the saved state
+_COUNTS = ("with_leaked", "released")
 
 
 @dataclass
@@ -44,12 +54,21 @@ class Entry:
     anime: MalAnime
     link: dict[str, Any] | None
     item: Any = None
-    # episodes on the site, None: not checked yet or failed
-    available: int | None = None
+    # the last episode on the site with the leaked episodes and without them, None: not checked yet or failed
+    counts: tuple[int, int] | None = None
+    # the count with the leaked episodes is shown: the setting is on or the title is finished on MyAnimeList
+    with_leaked: bool = False
     checking: bool = False
     failed: bool = False
-    # when a new episode was noticed (0: never)
+    # when the shown count grew (0: never)
     updated_at: float = 0
+
+    @property
+    def available(self) -> int | None:
+        """The last episode on the site, None: not checked yet or failed."""
+        if self.counts is None:
+            return None
+        return self.counts[0 if self.with_leaked else 1]
 
     @property
     def watched(self) -> int:
@@ -97,32 +116,94 @@ async def _available(item: Any) -> tuple[int, int]:
 
 
 async def check(entry: Entry, semaphore: asyncio.Semaphore, *, force: bool = False, show_leaked: bool = False) -> None:
-    """Fill `entry.available` from the site of the link (cached for CACHE_TTL)."""
+    """Fill `entry.counts` from the site of the link (cached for CACHE_TTL)."""
     key = (entry.extractor_name, item_key(entry.item))
     # a title finished on MyAnimeList has nothing to leak: see anihub.common.episodes
-    with_leaked = show_leaked or entry.anime.airing_status == "finished_airing"
+    entry.with_leaked = show_leaked or entry.anime.airing_status == "finished_airing"
     cached = _cache.get(key)
-    if cached and not force and time.time() - cached[0] < CACHE_TTL:
-        entry.available, entry.checking = cached[1][0 if with_leaked else 1], False
+    # wall clock: the monotonic one stops during suspend, a night's sleep would keep the counts fresh.
+    # A clock set back must not keep an entry forever, hence the lower bound
+    if cached and not force and 0 <= time.time() - cached[0] < CACHE_TTL:
+        entry.counts, entry.checking = cached[1], False
         return
     try:
         async with semaphore:
-            available = await asyncio.wait_for(_available(entry.item), SITE_TIMEOUT)
-        entry.available = available[0 if with_leaked else 1]
-        _cache[key] = (time.time(), available)
+            counts = await asyncio.wait_for(_available(entry.item), SITE_TIMEOUT)
+        entry.counts = counts
+        _cache_counts(key, counts)
     except Exception:
         entry.failed = True
     finally:
         entry.checking = False
 
 
-def remember_releases(items: list[Entry]) -> None:
-    """Notice when the available episodes count grows."""
-    checked = [e for e in items if e.available is not None]
-    fake = [SimpleNamespace(url=f"mal:{e.anime.id}", title=e.anime.title, available=e.available) for e in checked]
-    updated = ongoing_state.track(STATE_KEY, fake, lambda i: f"ep:{i.available}")
+def _cache_counts(key: tuple[str, str], counts: tuple[int, int]) -> None:
+    now = time.time()
+    # expired ones are dropped, not only replaced: titles leave the list, links change
+    for expired in [k for k, (at, _) in _cache.items() if not 0 <= now - at < CACHE_TTL]:
+        del _cache[expired]
+    _cache[key] = (now, counts)
+
+
+def _state_path() -> Path:
+    return get_data_dir() / "watching.json"
+
+
+def _time(value: Any) -> float:
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+def _grown_at(record: dict[str, Any], name: str, count: int, now: float) -> float:
+    """Remember the count (the highest one seen), return when it grew the last time (0: never)."""
+    known = record.get(name)
+    if not isinstance(known, (int, float)):
+        record[name], record[f"{name}_at"] = count, 0  # nothing to compare with yet
+    elif count > known:
+        record[name], record[f"{name}_at"] = count, now
+    # fewer than before (the site lost an episode for a while) is not remembered: getting it back is not new
+    return _time(record.get(f"{name}_at"))
+
+
+def _recent(state: dict[str, Any], now: float) -> dict[str, Any]:
+    """The links checked within FORGET_AFTER, by site."""
+    kept: dict[str, Any] = {}
+    for name, site in state.items():
+        if not isinstance(site, dict):
+            continue
+        records = {
+            key: record
+            for key, record in site.items()
+            if isinstance(record, dict) and now - _time(record.get("checked_at")) < FORGET_AFTER
+        }
+        if records:
+            kept[name] = records
+    return kept
+
+
+def remember_releases(items: list[Entry], now: float | None = None) -> None:
+    """Notice when the episodes count of the site grows: `Entry.updated_at` of the checked entries."""
+    now = time.time() if now is None else now
+    path = _state_path()
+    state: dict[str, Any] = storage.read_json(path, {})
     for entry in items:
-        entry.updated_at = updated.get(f"mal:{entry.anime.id}", 0)
+        if entry.counts is None:
+            continue
+        site = state.get(entry.extractor_name)
+        if not isinstance(site, dict):
+            site = state[entry.extractor_name] = {}
+        key = item_key(entry.item)
+        record = site.get(key)
+        if not isinstance(record, dict):
+            record = site[key] = {}
+        grown = [_grown_at(record, name, count, now) for name, count in zip(_COUNTS, entry.counts, strict=True)]
+        record["title"] = entry.anime.title
+        record["checked_at"] = now
+        entry.updated_at = grown[0 if entry.with_leaked else 1]
+    try:
+        storage.write_json(path, _recent(state, now), indent=2)
+    except OSError:
+        # only the times of the releases are lost: they are not marked NEW
+        logger.warning("failed to save %s", path, exc_info=True)
 
 
 def ordered(items: list[Entry]) -> list[Entry]:

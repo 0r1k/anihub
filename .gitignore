@@ -130,3 +130,25 @@ dmypy.json
 
 # project files
 .idea/*
+.vscode/
+
+.ruff_cache/
+
+# editors and operating systems
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# files anihub keeps for the user: a run with XDG_CONFIG_HOME/XDG_DATA_HOME (APPDATA) pointed into the
+# checkout writes them here, and the MAL token must never get into a commit or the wheel
+settings.json
+mal_token.json
+history.json
+mal_links.json
+mal_feed.json
+ongoing.json
+watching.json
+*.broken-*.json
+.*.json.*.tmp

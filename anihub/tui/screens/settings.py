@@ -12,11 +12,11 @@ from textual.widgets import Button, Checkbox, Input, Label, Select, Static
 
 from anihub.common.extractors import get_extractor_modules
 from anihub.common.players import PLAYERS
-from anihub.common.utils import validate_proxy_url
+from anihub.common.utils import PROXY_SCHEMES, validate_proxy_url
+from anihub.tui.session import QUALITIES, NetworkSettingsError
 
 from .. import posters
 from ..i18n import LANGUAGES, localized_bindings, t
-from ..session import QUALITIES
 from .mal_dialogs import MalLoginScreen, client_id_help
 
 if TYPE_CHECKING:
@@ -33,6 +33,11 @@ def _is_proxy(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _timeout_text(timeout: float) -> str:
+    # 2.5 stays 2.5: shown as "2", it would be saved as 2 with the next change of any field
+    return f"{timeout:g}"
 
 
 class NavSelect(Select):
@@ -122,11 +127,23 @@ class SettingsScreen(ModalScreen[set[str]]):
             yield Input(
                 s.proxy or "",
                 placeholder="socks5://user:password@host:port",
-                validators=[Function(_is_proxy, t("format: scheme://user:password@host:port"))],
+                validators=[
+                    Function(
+                        _is_proxy,
+                        t(
+                            "format: scheme://user:password@host:port, scheme: {schemes}",
+                            schemes=", ".join(PROXY_SCHEMES),
+                        ),
+                    )
+                ],
                 id="proxy",
             )
+            # why the field is red: not every scheme works (no socks4)
+            proxy_error = Static(id="proxy-error", classes="dialog-hint", markup=False)
+            proxy_error.display = False
+            yield proxy_error
             yield Label(t("HTTP timeout, seconds"))
-            yield Input(str(int(s.timeout)), type="number", validators=[Number(minimum=1)], id="timeout")
+            yield Input(_timeout_text(s.timeout), type="number", validators=[Number(minimum=1)], id="timeout")
             yield Label("MyAnimeList", classes="dialog-section")
             yield Static(client_id_help(), classes="dialog-hint", markup=False)
             yield Label("Client ID")
@@ -146,6 +163,8 @@ class SettingsScreen(ModalScreen[set[str]]):
         self._language, self._extractor, self._network = s.language, s.extractor_name, (s.proxy, s.timeout)
         self._save_failed = self._dismissing = False
         self._update_mal_account()
+        # a saved proxy the session refused at start is shown with its error
+        self._show_proxy_error()
         self.query_one("#language").focus()
 
     def _update_mal_account(self) -> None:
@@ -206,6 +225,15 @@ class SettingsScreen(ModalScreen[set[str]]):
     def _field_changed(self) -> None:
         self._autosave()
 
+    @on(Input.Changed, "#proxy")
+    def _show_proxy_error(self) -> None:
+        field = self.query_one("#proxy", Input)
+        result = field.validate(field.value)
+        errors = result.failure_descriptions if result is not None else []
+        hint = self.query_one("#proxy-error", Static)
+        hint.update(" ".join(errors))
+        hint.display = bool(errors)
+
     def _valid(self, selector: str) -> Input | None:
         field = self.query_one(selector, Input)
         if field.validators and not field.validate(field.value).is_valid:  # type: ignore[union-attr]
@@ -234,20 +262,37 @@ class SettingsScreen(ModalScreen[set[str]]):
         if field := self._valid("#m3u-size"):
             s.m3u_size = int(field.value)
         if field := self._valid("#proxy"):
-            s.proxy = field.value.strip() or None
+            # normalized: what httpx parses, for every user of the setting (the update check too)
+            s.proxy = validate_proxy_url(field.value.strip()) if field.value.strip() else None
         if field := self._valid("#timeout"):
             s.timeout = float(field.value)
         s.mal_client_id = self.query_one("#mal-client-id", Input).value.strip()
         s.mal_auto_update = self.query_one("#mal-auto", Checkbox).value
 
-        if s.persistent() == before:
-            return
+        if s.persistent() != before:
+            self._save()
+
+    def _save(self) -> None:
         try:
-            s.save()
+            self.app.session.settings.save()
         except OSError as e:
             if not self._save_failed:
                 self._save_failed = True
                 self.notify(t("Settings applied but not saved: {error}", error=e), severity="warning", markup=False)
+
+    def _network_failed(self, error: NetworkSettingsError) -> None:
+        """The session keeps its proxy and timeout: back to them in the settings, the file and the fields.
+
+        The screen stays open with the error. The fields go back too, or the next autosave would copy the refused
+        values again and every Esc would fail the same way.
+        """
+        s = self.app.session.settings
+        s.proxy, s.timeout = self._network
+        self._save()
+        self.query_one("#proxy", Input).value = s.proxy or ""
+        self.query_one("#timeout", Input).value = _timeout_text(s.timeout)
+        self.query_one("#proxy").focus()
+        self.notify(t("Network settings not applied: {error}", error=error), severity="error", markup=False)
 
     async def action_close(self) -> None:
         if self._dismissing:
@@ -259,7 +304,14 @@ class SettingsScreen(ModalScreen[set[str]]):
         changed: set[str] = set()
 
         if (s.proxy, s.timeout) != self._network:
-            await session.set_network(proxy=s.proxy, timeout=s.timeout)
+            try:
+                session.set_network(proxy=s.proxy, timeout=s.timeout)
+            except NetworkSettingsError as e:
+                self._network_failed(e)
+                self._dismissing = False
+                return
+            # a poster blocked for the old connection (a geo 403, a dead route) may load through the new one
+            posters.forget_failures()
             changed.add("network")
         if s.extractor_name != self._extractor:
             session.set_extractor(s.extractor_name)

@@ -1,62 +1,68 @@
+"""Episodes typed by the user: "1-12", "1 3 5-7", "12.5", "OVA"."""
+
 from __future__ import annotations
 
+import math
+import re
+from collections.abc import Sequence
 
-def parse_selection_mask(s: str, n: int) -> list[bool]:
+from .i18n import t
+
+_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+# "1 - 3" and "1–3" are ranges too
+_DASH = re.compile(r"\s*[-–—]\s*")
+
+
+def _numeric(ordinal: object) -> float | None:
+    try:
+        number = float(str(ordinal).strip())
+    except ValueError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def episode_number(ordinal: object) -> int | None:
+    """The whole episode number (12 for 12 or "12"), None for "12.5", "OVA" and the like."""
+    number = _numeric(ordinal)
+    return int(number) if number is not None and number.is_integer() else None
+
+
+def parse_selection_mask(s: str, ordinals: Sequence[object]) -> list[bool]:
+    """Mask over the episode list of the episodes with the typed numbers (`ordinals`: their numbers in list order).
+
+    Numbers are the episode numbers, not positions: "13-24" in a season numbered from 13. A range takes every
+    numbered episode between its ends, 12.5 included; a number marks all episodes with it (duplicates); a missing
+    number in a range (a gap) is skipped. Names like "OVA" match the episode number as text. Spaces or commas
+    separate the parts. ValueError with a translated message: a part is not a number, or no episode has it.
     """
-    Разбирает строку выбора индексов и возвращает булеву маску длиной n.
-    Индексация 1-based (от 1 до n).
-
-    Поддерживает:
-      - одиночные индексы: '1 3 5'
-      - диапазоны: '1-3 5-7'
-      - комбинации: '1-3 2 5'
-    Ошибки:
-      - 0 или числа > n
-      - range: a > b
-      - неверный формат
-
-    Пример:
-        arr = list(range(10))
-        mask = parse_selection_mask("1-3 5", len(arr))
-        # mask = [True, True, True, False, True, False, False, False, False, False]
-    """
-    if not isinstance(s, str):
-        msg = "s must be a string"
-        raise TypeError(msg)
-    if not isinstance(n, int) or n <= 0:
-        msg = "n must be positive integer"
-        raise ValueError(msg)
-
-    tokens = s.strip().split()
-    mask = [False] * n
-
-    if not tokens:
-        return mask
-
-    for tok in tokens:
-        if "-" in tok:
-            parts = tok.split("-")
-            if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
-                msg = f"Bad range endpoints: {tok!r}"
-                raise ValueError(msg)
-
-            a, b = int(parts[0]), int(parts[1])
-            if a < 1 or b < 1 or a > n or b > n:
-                msg = f"Range {tok!r} out of bounds (1..{n})"
-                raise ValueError(msg)
-            if a > b:
-                msg = f"Bad range {tok!r} (start must be <= end)"
-                raise ValueError(msg)
-
-            mask[a - 1 : b] = [True] * (b - a + 1)
+    numbers = [_numeric(o) for o in ordinals]
+    names = [str(o).strip().casefold() for o in ordinals]
+    mask = [False] * len(ordinals)
+    bad: list[str] = []
+    missing: list[str] = []
+    for token in _DASH.sub("-", s).replace(",", " ").split():
+        found = False
+        start, sep, end = token.partition("-")
+        if sep and _NUMBER.fullmatch(start) and _NUMBER.fullmatch(end):
+            low, high = sorted((float(start), float(end)))
+            for i, number in enumerate(numbers):
+                if number is not None and low <= number <= high:
+                    mask[i] = found = True
+        elif _NUMBER.fullmatch(token):
+            for i, number in enumerate(numbers):
+                if number == float(token):
+                    mask[i] = found = True
         else:
-            if not tok.isdigit():
-                msg = f"Bad token: {tok!r}"
-                raise ValueError(msg)
-            v = int(tok)
-            if v < 1 or v > n:
-                msg = f"Index {v!r} out of bounds (1..{n})"
-                raise ValueError(msg)
-            mask[v - 1] = True
-
+            for i, name in enumerate(names):
+                if name == token.casefold():
+                    mask[i] = found = True
+            if not found:
+                bad.append(token)
+                continue
+        if not found:
+            missing.append(token)
+    if bad:
+        raise ValueError(t("Not an episode number: {parts}", parts=", ".join(bad)))
+    if missing:
+        raise ValueError(t("No such episodes in the list: {parts}", parts=", ".join(missing)))
     return mask

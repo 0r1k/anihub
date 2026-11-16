@@ -1,6 +1,6 @@
 from http.cookiejar import CookieJar
 from pathlib import Path
-from typing import Annotated, cast
+from typing import TYPE_CHECKING, Annotated, cast
 
 import typer
 from click import Choice
@@ -15,9 +15,16 @@ from anihub.common.cookies_config import (
     read_from_browser,
     read_from_netscape_file,
 )
+from anihub.common.extractors import source_domains
 
+from .common import storage
 from .common.players import PLAYERS
 from .common.utils import validate_proxy_url
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from .common.updater import TPACKAGE
 
 app = typer.Typer(
     pretty_exceptions_enable=False,
@@ -35,6 +42,53 @@ def _get_extractors_choice():
     return Choice(get_extractor_modules())
 
 
+# typer callbacks
+def _cb_check_proxy_opt(proxy: str | None) -> str | None:
+    if not proxy:
+        return proxy
+    try:
+        return validate_proxy_url(proxy)
+    except ValueError as e:
+        msg = f"Invalid proxy URL: {e}"
+        raise BadParameter(msg) from e
+
+
+def _proxy_or_saved(proxy: str | None) -> str | None:
+    """`--proxy` of the command, otherwise the proxy saved in the settings (F2). `--proxy ""`: no proxy."""
+    if proxy is not None:
+        return proxy or None
+    # the settings come with the TUI: loaded only when they are needed
+    from .tui.session import Settings
+
+    # read only: a broken file stays for the TUI, which moves it aside and tells the user
+    saved = Settings.load(read_only=True).proxy
+    if Settings.path() in storage.unusable_files:
+        console.print(
+            f"{Settings.path()} could not be read, the saved proxy is not used. Fix the file or pass --proxy",
+            style="yellow",
+            markup=False,
+            highlight=False,
+        )
+    if not saved:
+        return None
+    try:
+        return validate_proxy_url(saved)
+    except ValueError as e:
+        # like the TUI does with it (anihub 8.2 and older saved any scheme), F9 included
+        msg = f"The saved proxy is not used, anihub connects directly: {e}. Fix it in settings (F2) or pass --proxy"
+        console.print(msg, style="yellow", markup=False, highlight=False)
+        return None
+
+
+# release notes longer than that are cut in the update prompt
+_NOTES_LIMIT = 2000
+# no [default: ...]: rich markup of the help takes it for a tag and drops it
+UPDATE_PROXY_HELP = (
+    "proxy for the requests to GitHub and PyPI, like scheme://user:password@host:port, '' for none. "
+    "Default: the proxy saved in the settings (F2)"
+)
+
+
 @app.command(help="Show app, anicli-api versions and exit")
 def version():
     from rich.panel import Panel  # noqa
@@ -48,10 +102,10 @@ def version():
 
 @app.command(help="update anihub from GitHub releases (asks before installing)")
 def update(
-    force: Annotated[
-        bool, Option("--force", is_flag=True, help="reinstall even if the latest version is installed")
-    ] = False,
-    yes: Annotated[bool, Option("-y", "--yes", is_flag=True, help="do not ask for confirmation")] = False,
+    # a bool option is a flag: typer deprecates is_flag and is going to remove it
+    force: Annotated[bool, Option("--force", help="reinstall even if the latest version is installed")] = False,
+    yes: Annotated[bool, Option("-y", "--yes", help="do not ask for confirmation")] = False,
+    proxy: Annotated[str | None, Option("--proxy", help=UPDATE_PROXY_HELP, callback=_cb_check_proxy_opt)] = None,
 ):
     import typer
     from rich.markdown import Markdown
@@ -60,7 +114,8 @@ def update(
 
     current = anihub.__version__
     try:
-        release = updater.fetch_latest_release()
+        # the installer below goes to GitHub by the network settings of the system (HTTPS_PROXY ...) as before
+        release = updater.fetch_latest_release(proxy=_proxy_or_saved(proxy))
     except updater.UpdateExceptionError as e:
         console.print(f"[red]{e}[/]")
         raise typer.Exit(1) from e
@@ -73,7 +128,7 @@ def update(
 
     console.print(f"[bold]anihub {current} → {release.version}[/]  {release.url}")
     if release.notes:
-        notes = release.notes if len(release.notes) < 2000 else release.notes[:2000] + "\n\n…"
+        notes = release.notes if len(release.notes) < _NOTES_LIMIT else release.notes[:_NOTES_LIMIT] + "\n\n…"
         console.print(Markdown(notes))
     try:
         method = updater.install_method()
@@ -97,7 +152,9 @@ def update(
 
 
 @app.command(help="check for a new anihub release on GitHub and anicli-api on PyPI")
-def check_updates():
+def check_updates(
+    proxy: Annotated[str | None, Option("--proxy", help=UPDATE_PROXY_HELP, callback=_cb_check_proxy_opt)] = None,
+):
     import asyncio
 
     from rich import box
@@ -105,34 +162,27 @@ def check_updates():
 
     from .common.updater import check_for_updates
 
-    result = asyncio.run(check_for_updates())
+    result = asyncio.run(check_for_updates(proxy=_proxy_or_saved(proxy)))
+    # mypy types the values of a TypedDict as object: here every one is a package
+    packages = cast("Iterable[TPACKAGE]", result.values())
     table = Table("Package", "Current", "Latest", "Status", box=box.ROUNDED, title="Update check")
-    for info in result.values():
+    for info in packages:
         status = "[bold yellow]Available ⬆[/]" if info["is_outdated"] else "[green]Up-to-date ✓[/]"
         table.add_row(info["package_name"], info["current_version"], info["latest_version"], status)
     console.print(table)
-    if any(info["is_outdated"] for info in result.values()):
+    if any(info["is_outdated"] for info in packages):
         console.print("TIP: run `anihub update` to install the new version")
-
-
-# typer callbacks
-def _cb_check_proxy_opt(proxy: str | None) -> str | None:
-    if not proxy:
-        return proxy
-    try:
-        validate_proxy_url(proxy)
-    except ValueError as e:
-        raise BadParameter(f"Invalid proxy URL: {e}") from e
-    return proxy
 
 
 def _cb_check_read_browser_cookie_opt(browser_name: str | None) -> CookieJar | None:
     if not browser_name:
         return None
     try:
-        return read_from_browser(browser_name)
+        # the sites of all sources: the source is chosen later (saved settings, F2) and can change while it runs
+        return read_from_browser(browser_name, source_domains())
     except ImportError as e:
-        raise BadParameter("rookiepy dependency required. Add via `anihub[cookies]`") from e
+        msg = "rookiepy dependency required. Add via `anihub[cookies]`"
+        raise BadParameter(msg) from e
     except Exception as e:
         raise BadParameter(str(e)) from e
 
@@ -166,7 +216,6 @@ def _cb_parse_headers(headers: list[str] | None) -> list[str] | None:
 
 @app.command(help="run TUI application (play video via mpv, vlc or another player)")
 def tui(
-    # fmt: off
     # None: use value saved in the settings screen (F2)
     source: Annotated[
         str | None,
@@ -254,7 +303,6 @@ def tui(
         ),
     ] = None,
 ) -> None:
-    # fmt: on
     if search and ongoing:
         msg = "Not allowed pass both `--search` and `--ongoing` options. Pick once option"
         raise BadParameter(msg)
@@ -267,10 +315,11 @@ def tui(
         headers.update(cast(dict[str, str], headers_file))
 
     cookies: CookieJar | None = None
-    for jar in (extract_cookies_from_browser, netscape_cookies):
-        if not jar:
+    # the option callbacks have turned both values into cookie jars
+    for value in (extract_cookies_from_browser, netscape_cookies):
+        if not value:
             continue
-        jar = cast(CookieJar, jar)
+        jar = cast(CookieJar, value)
         if cookies is None:
             cookies = jar
         else:
@@ -291,9 +340,11 @@ def tui(
         headers=headers,
         cookies=cookies,
     )
-    if AnihubApp(Session(settings), query=search, ongoing=ongoing).run() == EXIT_UPDATE:
-        # confirmed in the app (F9): the terminal is free for the installer output now
-        update(force=False, yes=True)
+    session = Session(settings)
+    if AnihubApp(session, query=search, ongoing=ongoing).run() == EXIT_UPDATE:
+        # confirmed in the app (F9): the terminal is free for the installer output now.
+        # The proxy the run ended with (changed in F2 or not, None if the saved one is refused)
+        update(force=False, yes=True, proxy=session.proxy or "")
 
 
 # backward compatibility: `anihub cli ...` runs the same TUI

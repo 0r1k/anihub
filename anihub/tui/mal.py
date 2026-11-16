@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from rich.text import Text
 
 from anihub.common import mal_links
-from anihub.common.mal import SCORE_LABELS, STATUS_LABELS, MalAnime
+from anihub.common.mal import MIN_QUERY_LENGTH, SCORE_LABELS, STATUS_LABELS, MalAnime
 
 from .i18n import t
 
@@ -49,7 +49,7 @@ def describe(mal: MalAnime, *, with_status: bool = False) -> Text:
 def search_queries(titles: list[str], limit: int = 4) -> list[str]:
     """MAL knows romaji/english/japanese titles: try them before the russian one."""
     ordered = sorted(titles, key=lambda title: bool(_CYRILLIC.search(title)))
-    return [title for title in ordered if len(title.strip()) >= 3][:limit]
+    return [title for title in ordered if len(title.strip()) >= MIN_QUERY_LENGTH][:limit]
 
 
 def search_text(anime: MalAnime, extra: str = "") -> str:
@@ -75,8 +75,9 @@ async def resolve(
     mal = session.mal
     link = mal_links.get(item, extractor_name)
     mal_id, titles = mal_links.hints(item, *([anime] if anime is not None else []))
-    if link:
-        return await mal.get_anime(link["mal_id"]), titles
+    # mal_links.json can be edited by hand: a link without a valid id is no link
+    if link and isinstance(saved_id := link.get("mal_id"), int):
+        return await mal.get_anime(saved_id), titles
     if hint is not None:
         found = await mal.get_anime(hint.id)
         mal_links.save(item, extractor_name, found)
@@ -98,6 +99,18 @@ async def link(session: Session, item: Any, extractor_name: str, chosen: MalAnim
     found = await session.mal.get_anime(chosen.id)
     mal_links.save(item, extractor_name, found)
     return found
+
+
+def episode_number(value: Any) -> int | None:
+    """The number MyAnimeList counts the episode by: a whole number from 1, not "12.5", "OVA" or 0."""
+    if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
+        value = int(value)
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    # bool is an int too
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    return None
 
 
 async def episode_watched(session: Session, mal_id: int, episode: int) -> tuple[MalAnime, dict[str, Any]]:

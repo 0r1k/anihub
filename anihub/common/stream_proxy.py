@@ -41,6 +41,10 @@ READ_TIMEOUT = 15
 ATTEMPTS = 8
 # the player has not read for this long: the download is requested again from the next byte, see above
 IDLE_RECONNECT = 10
+# a keep-alive connection without a new request for this long is closed (and so is a request head that never
+# ends). Players send the next request on a new connection then (ffmpeg, VLC), so a long pause does not break
+# the video; the HLS segments of a playing video are asked for every few seconds
+KEEP_ALIVE_TIMEOUT = 120
 # dash manifests may point to other hosts with absolute urls and are not rewritten: played directly
 PROXIED_TYPES = ("m3u8", "mp4", "webm")
 _RETRY_STATUSES = (502, 503, 504)
@@ -53,6 +57,14 @@ _FORWARDED_RESPONSE = ("content-type", "content-length", "content-range", "accep
 
 class _PlayerGoneError(Exception):
     """The player closed the connection (seek, stop)."""
+
+
+def _is_web_url(url: str) -> bool:
+    """An http(s) url the proxy can fetch. A broken one (`http://[x/`) is left to the player, which reports it."""
+    try:
+        return urlsplit(url).scheme in ("http", "https")
+    except ValueError:
+        return False
 
 
 def _is_playlist(url: str, content_type: str) -> bool:
@@ -117,36 +129,56 @@ class StreamProxy:
         # origin id in the local url path -> (scheme://host of the hosting, headers it requires)
         self._origins: list[tuple[str, dict[str, str]]] = []
         self._origin_ids: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
+        # two episodes started at once must not start two servers
+        self._lock = asyncio.Lock()
+        # connections of the players by the task serving them: the server does not close them itself
+        self._connections: dict[asyncio.Task[None], StreamWriter] = {}
 
     async def start(self) -> None:
-        if self._server is not None:
-            return
-        self._client = httpx.AsyncClient(
-            # the user's proxy is for the sites: players never used it for the video itself
-            headers={"User-Agent": HEADERS["User-Agent"], "Accept-Encoding": "identity"},
-            follow_redirects=True,
-            timeout=httpx.Timeout(READ_TIMEOUT, connect=CONNECT_TIMEOUT),
-            # hostings close idle connections themselves, keep them while the player cache is full
-            limits=httpx.Limits(max_keepalive_connections=8, keepalive_expiry=60),
-        )
-        self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
-        self.port = self._server.sockets[0].getsockname()[1]
-        logger.info("stream proxy on 127.0.0.1:%s", self.port)
+        async with self._lock:
+            if self._server is not None:
+                return
+            # the client first: if it cannot be created (a bad proxy in the environment), no server is left
+            # half started, and every wrap() raises the real error again
+            client = httpx.AsyncClient(
+                # the user's proxy is for the sites: players never used it for the video itself
+                headers={"User-Agent": HEADERS["User-Agent"], "Accept-Encoding": "identity"},
+                follow_redirects=True,
+                timeout=httpx.Timeout(READ_TIMEOUT, connect=CONNECT_TIMEOUT),
+                # hostings close idle connections themselves, keep them while the player cache is full
+                limits=httpx.Limits(max_keepalive_connections=8, keepalive_expiry=60),
+            )
+            try:
+                server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+            except BaseException:
+                await client.aclose()
+                raise
+            self._client = client
+            self._server = server
+            self.port = server.sockets[0].getsockname()[1]
+            logger.info("stream proxy on 127.0.0.1:%s", self.port)
 
     async def aclose(self) -> None:
-        if self._server is not None:
-            self._server.close()
-            self._server = None
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        async with self._lock:
+            if self._server is not None:
+                self._server.close()
+                self._server = None
+            connections = list(self._connections.items())
+            for task, writer in connections:
+                # abort, not close: a player that stopped reading would hold a graceful close forever
+                writer.transport.abort()
+                task.cancel()
+            await asyncio.gather(*(task for task, _ in connections), return_exceptions=True)
+            if self._client is not None:
+                await self._client.aclose()
+                self._client = None
 
     async def wrap(self, videos: Sequence[Video]) -> list[Video]:
         """Videos to give the player: the supported ones point to the proxy and need no headers."""
         await self.start()
         return [
             Video(type=v.type, quality=v.quality, url=self.local_url(v.url, v.headers))
-            if v.type in PROXIED_TYPES and urlsplit(v.url).scheme in ("http", "https")
+            if v.type in PROXIED_TYPES and _is_web_url(v.url)
             else v
             for v in videos
         ]
@@ -177,8 +209,11 @@ class StreamProxy:
         """Point every uri of the HLS playlist (variants, segments, keys, init sections) to the proxy."""
 
         def local(uri: str) -> str:
-            url = urljoin(base_url, uri.strip())
-            return self.local_url(url, headers) if urlsplit(url).scheme in ("http", "https") else uri
+            try:
+                url = urljoin(base_url, uri.strip())
+            except ValueError:  # a broken uri in the playlist: the player gets it as it is
+                return uri
+            return self.local_url(url, headers) if _is_web_url(url) else uri
 
         lines = []
         for line in text.splitlines():
@@ -194,6 +229,12 @@ class StreamProxy:
     # --- server ------------------------------------------------------------
 
     async def _handle(self, reader: StreamReader, writer: StreamWriter) -> None:
+        task = asyncio.current_task()
+        if task is not None and self._server is not None:
+            self._connections[task] = writer
+        else:
+            writer.transport.abort()  # accepted while the proxy was closing
+            return
         try:
             while request := await self._read_request(reader):
                 method, target, headers, keep_alive = request
@@ -204,6 +245,7 @@ class StreamProxy:
         except Exception:
             logger.exception("stream proxy failed")
         finally:
+            self._connections.pop(task, None)
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
@@ -211,9 +253,11 @@ class StreamProxy:
     @staticmethod
     async def _read_request(reader: StreamReader) -> tuple[str, str, dict[str, str], bool] | None:
         try:
-            head = await reader.readuntil(b"\r\n\r\n")
+            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), KEEP_ALIVE_TIMEOUT)
         except asyncio.IncompleteReadError:
             return None  # the player closed an idle keep-alive connection
+        except asyncio.TimeoutError:
+            return None  # idle for too long: see KEEP_ALIVE_TIMEOUT
         lines = head.decode("latin-1").split("\r\n")
         method, target, version = [*lines[0].split(" ", 2), "", ""][:3]
         headers = {}

@@ -36,5 +36,5 @@ class ConfirmScreen(ModalScreen[bool]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "yes")
 
-    def action_answer(self, value: bool) -> None:
+    def action_answer(self, value: bool) -> None:  # noqa: FBT001 (a binding passes it: answer(True))
         self.dismiss(value)

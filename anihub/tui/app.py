@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import itertools
+import logging
 from collections.abc import Awaitable
+from typing import TYPE_CHECKING, cast
 
 from textual import work
 from textual.app import App
@@ -12,9 +14,9 @@ from textual.reactive import reactive
 from textual.theme import Theme
 
 import anihub
-from anihub.common import mal_links
+from anihub.common import mal_links, storage
 from anihub.common.mal import MalAnime, MalAuthError, MalError
-from anihub.common.players import is_installed
+from anihub.common.players import PlayerArgsError, PlayerNotFoundError, resolve_command
 
 from . import logs, mal
 from .i18n import localized_bindings, set_language, t
@@ -26,8 +28,18 @@ from .screens.mal_dialogs import ScoreScreen
 from .screens.settings import SettingsScreen
 from .session import Session
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from anihub.common.updater import TPACKAGE
+
+logger = logging.getLogger(__name__)
 # `AnihubApp.run()` result: the user chose to update anihub, the terminal runs the update after the app exits
 EXIT_UPDATE = "update"
+# how often to look for JSON files found broken (and moved aside) while the app runs
+BROKEN_FILES_CHECK = 1.0
+# the bottom of the screen stack: Textual's default screen and the home screen
+_HOME_DEPTH = 2
 
 
 @localized_bindings
@@ -48,7 +60,7 @@ class AnihubApp(App[str | None]):
     def __init__(self, session: Session, *, query: str | None = None, ongoing: bool = False) -> None:
         # library logs written to the terminal would break the layout
         logs.setup()
-        # translate class bindings before this instance copies them
+        # texts made at compose time are translated: screens are made right below
         set_language(session.settings.language)
         super().__init__()
         self.session = session
@@ -59,6 +71,8 @@ class AnihubApp(App[str | None]):
         self._mal_lock = asyncio.Lock()
         # the newer anihub release found at start (None: up to date or the check failed)
         self._new_version: str | None = None
+        # broken files (storage.broken_files) the user was told about
+        self._broken_shown = 0
 
     def on_mount(self) -> None:
         self.sub_title = self.session.settings.extractor_name
@@ -66,18 +80,44 @@ class AnihubApp(App[str | None]):
             self.theme = self.session.settings.theme
         self.theme_changed_signal.subscribe(self, self._save_theme)
         self.push_screen(self._home)
+        # already translated: the language is set above
+        for warning in self.session.startup_warnings():
+            self.notify(warning, severity="warning", timeout=20, markup=False)
+        # settings and the MAL token are read before the app starts, the history and the rest while it runs
+        self.show_broken_files()
+        self.set_interval(BROKEN_FILES_CHECK, self.show_broken_files)
         self.check_player()
         self.check_updates()
 
-    def check_player(self) -> None:
-        command = self.session.settings.player_executable
-        if not is_installed(command):
+    def show_broken_files(self) -> None:
+        """Tell about every JSON file found broken and moved aside since the start, once."""
+        new = storage.broken_files[self._broken_shown :]
+        self._broken_shown += len(new)
+        for path, moved in new:
             self.notify(
-                t("Player not found: {command}. Choose another one in settings (F2)", command=command or "?"),
-                severity="error",
-                timeout=10,
+                t(
+                    "{file} was damaged and is reset. The damaged copy is kept next to it: {moved}",
+                    file=str(path),
+                    moved=moved.name,
+                ),
+                title=t("Damaged file"),
+                severity="warning",
+                timeout=20,
                 markup=False,
             )
+
+    def check_player(self) -> None:
+        command = self.session.settings.player_executable
+        try:
+            resolve_command(command)
+        except PlayerArgsError as e:
+            # an unclosed quote in a custom command: the player may well be installed
+            message = t("Wrong player arguments: {error}. Fix them in settings (F2)", error=e)
+        except PlayerNotFoundError:
+            message = t("Player not found: {command}. Choose another one in settings (F2)", command=command or "?")
+        else:
+            return
+        self.notify(message, severity="error", timeout=10, markup=False)
 
     def _save_theme(self, theme: Theme) -> None:
         settings = self.session.settings
@@ -104,9 +144,11 @@ class AnihubApp(App[str | None]):
         except asyncio.CancelledError:
             raise
         except PlaybackError as e:
+            # its cause (the player, the site) is in the traceback
+            logger.warning("playback failed: %s", e, exc_info=True)
             self.notify(str(e), severity="error", markup=False)
         except Exception as e:
-            self.log.error(e)
+            logger.exception("playback failed")
             self.notify(t("Playback error: {error}", error=e), severity="error", markup=False)
         finally:
             if play_id == self._current_play:
@@ -127,7 +169,12 @@ class AnihubApp(App[str | None]):
         """Playback callback counting watched episodes of the title on MyAnimeList."""
         if not self.session.mal_tracking:
             return None
-        return lambda episode: self.mal_track(extractor_name, key, episode)
+
+        def track(episode: int) -> None:
+            # starts the worker: the playback does not wait for MyAnimeList
+            self.mal_track(extractor_name, key, episode)
+
+        return track
 
     def mal_confirm_watched(self, extractor_name: str, key: str) -> ConfirmWatched | None:
         if not self.session.mal_tracking:
@@ -137,7 +184,9 @@ class AnihubApp(App[str | None]):
             if mal_links.get_by_key(extractor_name, key) is None:
                 return False
             question = t("Mark «{title}» as watched on MyAnimeList?", title=title)
-            return bool(await self.push_screen_wait(ConfirmScreen(question)))
+            # a typed local: inside bool() mypy would expect Screen[object]
+            confirmed = await self.push_screen_wait(ConfirmScreen(question))
+            return bool(confirmed)
 
         return confirm
 
@@ -151,17 +200,50 @@ class AnihubApp(App[str | None]):
                 markup=False,
             )
             return
+        number = mal.episode_number(episode)
+        if number is None:
+            logger.warning("episode %r of %s %s is not counted on MyAnimeList", episode, extractor_name, key)
+            self.notify(
+                t(
+                    "Episode «{episode}» is not counted on MyAnimeList: it counts episodes 1, 2, 3… "
+                    "Set the watched episodes on the title page (e)",
+                    episode=episode,
+                ),
+                severity="warning",
+                markup=False,
+            )
+            return
         try:
             async with self._mal_lock:
-                anime, fields = await mal.episode_watched(self.session, link["mal_id"], int(episode))
-        except (TypeError, ValueError):
-            return
+                anime, fields = await mal.episode_watched(self.session, link["mal_id"], number)
         except MalAuthError as e:
+            logger.warning("episode %s of %s %s is not counted on MyAnimeList: %s", number, extractor_name, key, e)
             self.notify(t("{error}. Log in again in settings (F2)", error=e), severity="error", markup=False)
             return
         except MalError as e:
+            logger.warning("episode %s of %s %s is not counted on MyAnimeList: %s", number, extractor_name, key, e)
             self.notify(str(e), severity="error", markup=False)
             return
+        except Exception as e:
+            # a worker failing with exit_on_error=False is silent
+            logger.exception("episode %s of %s %s is not counted on MyAnimeList", number, extractor_name, key)
+            message = t("The episode is not counted on MyAnimeList: {error}", error=e)
+            self.notify(message, severity="error", markup=False)
+            return
+        if anime.num_episodes and number > anime.num_episodes:
+            # eg: the site numbers the episodes of all seasons in a row
+            logger.warning("episode %s of %s %s is beyond the MAL entry %s", number, extractor_name, key, anime.id)
+            self.notify(
+                t(
+                    "Episode {episode} is not counted on MyAnimeList: «{title}» has {total} episodes there. "
+                    "Check the link on the title page (l)",
+                    episode=number,
+                    title=anime.title,
+                    total=anime.num_episodes,
+                ),
+                severity="warning",
+                markup=False,
+            )
         for screen in self.screen_stack:
             if isinstance(screen, AnimeScreen) and screen.matches(extractor_name, key):
                 screen.set_mal(anime)
@@ -206,7 +288,7 @@ class AnihubApp(App[str | None]):
             try:
                 item = mal_links.restore(link, self.session.http_kwargs)
             except Exception:
-                self.log.warning(f"broken MAL link: {link}")
+                logger.warning("broken MAL link %r", link, exc_info=True)
             else:
                 self.push_screen(AnimeScreen(item, link["extractor_name"]))
                 return
@@ -214,7 +296,7 @@ class AnihubApp(App[str | None]):
         self._home.open_mal_anime(anime)
 
     def go_home(self) -> None:
-        while len(self.screen_stack) > 2:
+        while len(self.screen_stack) > _HOME_DEPTH:
             self.pop_screen()
 
     def show_home_tab(self, tab: str) -> None:
@@ -243,9 +325,8 @@ class AnihubApp(App[str | None]):
         self.push_screen(SettingsScreen(), on_close)
 
     def apply_language(self) -> None:
-        """Translate bindings and rebuild screens: texts are rendered at compose time."""
+        """Rebuild screens (texts are rendered at compose time), the footer translates bindings as it is redrawn."""
         set_language(self.session.settings.language)
-        self._bindings = self._merged_bindings.copy()  # type: ignore[union-attr]
         self.go_home()
         self._home = HomeScreen()
         self.switch_screen(self._home)
@@ -253,15 +334,17 @@ class AnihubApp(App[str | None]):
 
     @work(exit_on_error=False)
     async def check_updates(self) -> None:
-        from anihub.common.updater import check_for_updates
+        from anihub.common.updater import check_for_updates  # noqa: PLC0415 (looked up when called: tests replace it)
 
-        result = await check_for_updates()
+        result = await check_for_updates(proxy=self.session.proxy)
         if result["anihub"]["is_outdated"]:
             self._new_version = result["anihub"]["latest_version"]
             self.refresh_bindings()
+        # mypy types the values of a TypedDict as object: here every one is a package
+        packages = cast("Iterable[TPACKAGE]", result.values())
         outdated = [
             f"{info['package_name']} {info['current_version']} → {info['latest_version']}"
-            for info in result.values()
+            for info in packages
             if info["is_outdated"]
         ]
         if outdated:
@@ -269,7 +352,7 @@ class AnihubApp(App[str | None]):
             hint = t("F9 — update now") if self._new_version else t("Run `anihub update` to upgrade")
             self.notify("\n".join(outdated) + "\n" + hint, title=t("Update available"), timeout=20)
 
-    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:  # noqa: ARG002 (Textual's signature)
         if action == "update":
             return self._new_version is not None
         return True
@@ -284,7 +367,7 @@ class AnihubApp(App[str | None]):
             latest=self._new_version,
         )
 
-        def answer(confirmed: bool | None) -> None:
+        def answer(confirmed: bool | None) -> None:  # noqa: FBT001 (the result of the screen)
             if confirmed:
                 self.exit(EXIT_UPDATE)
 
