@@ -9,6 +9,7 @@ from typing import Any
 
 import attr
 import pytest
+from textual.css.query import NoMatches
 from textual.screen import Screen
 from textual.widgets import Footer
 
@@ -175,7 +176,22 @@ def test_playback_errors_are_logged(caplog):
 
 
 def _footer(app: AnihubApp) -> set[str]:
-    return {key.description for key in app.screen.query_one(Footer).query("FooterKey")}  # type: ignore[attr-defined]
+    try:
+        footer = app.screen.query_one(Footer)
+    except NoMatches:  # the screen is being recomposed after the language changed
+        return set()
+    return {key.description for key in footer.query("FooterKey")}  # type: ignore[attr-defined]
+
+
+async def _footer_when(pilot: Any, app: AnihubApp, ready: Any) -> set[str]:
+    """The footer once `ready(descriptions)` holds: it is recomposed after the screen or the language changes,
+    which takes more than one pause on a slow CI runner."""
+    for _ in range(100):
+        shown = _footer(app)
+        if ready(shown):
+            return shown
+        await pilot.pause(0.05)
+    return _footer(app)
 
 
 def test_textual_shows_bindings_from_active_bindings():
@@ -190,17 +206,18 @@ def test_footer_follows_the_language():
     async def check() -> None:
         app, _ = _app()
         async with app.run_test(size=(160, 40)) as pilot:
-            await pilot.pause()
-            assert {"Search", "Refresh", "Settings"} <= _footer(app), _footer(app)
+            english = {"Search", "Refresh", "Settings"}
+            shown = await _footer_when(pilot, app, english.issubset)
+            assert english <= shown, shown
             app.session.settings.language = "uk"
             app.apply_language()
-            await pilot.pause(0.2)
-            shown = _footer(app)
-            assert {"Пошук", "Оновити", "Налаштування"} <= shown and "Search" not in shown, shown
+            ukrainian = {"Пошук", "Оновити", "Налаштування"}
+            shown = await _footer_when(pilot, app, ukrainian.issubset)
+            assert ukrainian <= shown and "Search" not in shown, shown
             app.session.settings.language = "en"
             app.apply_language()
-            await pilot.pause(0.2)
-            assert "Search" in _footer(app)
+            shown = await _footer_when(pilot, app, lambda keys: "Search" in keys)
+            assert "Search" in shown, shown
 
     run(check())
 

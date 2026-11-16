@@ -54,6 +54,16 @@ def fake_player(tmp_path: Path, body: str) -> str:
     return f'"{sys.executable}" "{script}"'
 
 
+def _running_tasks() -> set[asyncio.Task[Any]]:
+    """Tasks of the loop but the accept task of a closed server on Windows: the proactor cancels its future
+    and the task ends a loop turn later, it is asyncio's, not one left running by anihub."""
+    return {
+        task
+        for task in asyncio.all_tasks()
+        if not getattr(task.get_coro(), "__qualname__", "").endswith("IocpProactor.accept.<locals>.accept_coro")
+    }
+
+
 def run_clean(coro: Coroutine[Any, Any, T]) -> T:
     """asyncio.run() that fails on a task left running and on an error the loop reports (an exception never
     retrieved): the run ending cancels the tasks left and would hide them."""
@@ -62,7 +72,7 @@ def run_clean(coro: Coroutine[Any, Any, T]) -> T:
     async def main() -> T:
         asyncio.get_running_loop().set_exception_handler(lambda _loop, context: reported.append(context))
         result = await coro
-        assert asyncio.all_tasks() == {asyncio.current_task()}, "a task is left running"
+        assert _running_tasks() == {asyncio.current_task()}, "a task is left running"
         gc.collect()  # a future holding an exception reports it when collected
         return result
 

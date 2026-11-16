@@ -57,6 +57,12 @@ class Hosting:
         return asyncio.run(run())
 
 
+def _delay(retry_at: float) -> float:
+    """Seconds until the retry, to the millisecond: Windows' monotonic clock ticks every ~16 ms, so a delay
+    of exactly 3600 s can read as 3600.0000000000005."""
+    return round(retry_at - posters.time.monotonic(), 3)
+
+
 def test_a_poster_is_downloaded_resized_and_cached():
     hosting = Hosting(httpx.Response(200, content=image_bytes((800, 1200))))
     image = hosting.fetch()
@@ -158,18 +164,18 @@ def test_a_transient_failure_waits_a_minute_then_longer(answer):
     assert hosting.fetch() is None
     assert hosting.fetch() is None and hosting.requests == 1  # not asked again at once
     retry_at, failures = posters._failed[URL]
-    assert failures == 1 and retry_at - posters.time.monotonic() <= posters._RETRY_AFTER
+    assert failures == 1 and _delay(retry_at) <= posters._RETRY_AFTER
     posters._failed[URL] = (0.0, failures)  # the delay is over
     assert hosting.fetch() is None and hosting.requests == 2
     retry_at, failures = posters._failed[URL]
-    assert failures == 2 and posters._RETRY_AFTER < retry_at - posters.time.monotonic() <= 2 * posters._RETRY_AFTER
+    assert failures == 2 and posters._RETRY_AFTER < _delay(retry_at) <= 2 * posters._RETRY_AFTER
 
 
 @pytest.mark.parametrize("answer", [httpx.Response(404), httpx.Response(200, content=b"garbage")])
 def test_a_missing_image_waits_the_longest(answer):
     assert Hosting(answer).fetch() is None
     retry_at, _ = posters._failed[URL]
-    assert retry_at - posters.time.monotonic() > posters._RETRY_AFTER_MAX - 60
+    assert _delay(retry_at) > posters._RETRY_AFTER_MAX - 60
 
 
 def test_the_delay_does_not_grow_forever():
@@ -179,7 +185,7 @@ def test_the_delay_does_not_grow_forever():
             posters._failed[URL] = (0.0, posters._failed[URL][1])
         hosting.fetch()
     retry_at, failures = posters._failed[URL]
-    assert failures == 20 and retry_at - posters.time.monotonic() <= posters._RETRY_AFTER_MAX
+    assert failures == 20 and _delay(retry_at) <= posters._RETRY_AFTER_MAX
 
 
 def test_the_poster_comes_back_after_the_delay():
