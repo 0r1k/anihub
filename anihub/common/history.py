@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import attr
 
@@ -187,6 +187,28 @@ def episode_ordinal(entry: dict[str, Any], episode_title: str) -> int | None:
         if source.get("episode_title") == episode_title:
             return source.get("ordinal")
     return None
+
+
+class Watched(NamedTuple):
+    # the number of the last episode watched (started), None: unknown (saved before 7.1)
+    episode: int | None
+    # when the title was watched the last time, None: unknown (saved before 8.4)
+    at: float | None
+
+
+def watched(entry: dict[str, Any]) -> Watched:
+    ordinal = episode_ordinal(entry, entry.get("episode", ""))
+    try:
+        episode = int(ordinal) if ordinal is not None else None
+    except (TypeError, ValueError):
+        episode = None
+    at = entry.get("watched_at")
+    return Watched(episode, float(at) if isinstance(at, (int, float)) else None)
+
+
+def watched_titles() -> dict[tuple[str, str], Watched]:
+    """`watched` of the titles in the history by (extractor name, `item_key`)."""
+    return {(entry.get("extractor_name", ""), entry_key(entry)): watched(entry) for entry in read()}
 
 
 def load_source(entry: dict[str, Any], episode_title: str, http: T_KW_HTTPS | None = None) -> BaseSource:

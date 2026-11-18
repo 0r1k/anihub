@@ -20,6 +20,9 @@ from typing import Any
 
 from rich.text import Text
 
+from anihub.common.history import Watched
+from anihub.common.ongoing_state import Release
+
 from .i18n import t
 
 AIRING = "airing"
@@ -67,24 +70,62 @@ def status(item: Any) -> str:
     return AIRING
 
 
-def mark(item: Any) -> str:
-    """What changes in the list item when a new episode (or a new dub of it) comes out."""
+def _int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value)
+    return None
+
+
+def last_episode(item: Any) -> tuple[int, bool] | None:
+    """(number, single) of the last episode out, None: the list of the site has no numbers.
+
+    single: the number of one episode (a leaked one can come after a gap), otherwise the count of the episodes
+    out, which has no gaps. A new dub or subtitles of an episode do not change it.
+    """
     data = _data(item)
     episodes = data.get("episodes")
-    if isinstance(episodes, dict) and "aired" in episodes:  # yummy-anime
-        return f"ep:{episodes['aired']}"
-    if isinstance(data.get("series"), int):  # dreamcast
-        return f"ep:{data['series']}"
+    if isinstance(episodes, dict) and (aired := _int(episodes.get("aired"))) is not None:  # yummy-anime
+        return aired, False
+    if (series := _int(data.get("series"))) is not None:  # dreamcast
+        return series, False
+    # anitube: "3 з 12 (24 хв.)", the "added" text changes with every dub
+    if isinstance(text := data.get("episodes_text"), str) and (found := _UA_EPISODES.match(text.strip())):
+        return int(found.group(1)), False
+    # animego: an entry per episode, its dubs in one
+    if (episode := _int(getattr(item, "episode", None))) is not None:
+        return episode, True
+    title = getattr(item, "title", "")
+    if found := _VOST_EPISODES.search(title):  # animevost: "[1-3 из 12+]"
+        return int(found.group(1)), False
+    if found := _REZKA_EPISODE.search(title):  # hdrezka: "2 сезон, 3 серия"
+        return int(found.group(1)), True
+    return None
+
+
+def mark(item: Any) -> str:
+    """What changes in the list item of a site without episode numbers (see `last_episode`) on a release."""
+    data = _data(item)
     if data.get("fresh_at"):  # anilibria: time of the last released episode
         return f"fresh:{data['fresh_at']}"
-    if data.get("added"):  # anitube: "Додано 4 СУБ (Morys) / 4 СУБ 4 ОЗВ (Рідний Голос)"
+    if data.get("added"):  # anitube without the episodes text: "Додано 4 СУБ (Morys)"
         return f"added:{data['added']}"
-    if (episode := getattr(item, "episode", None)) is not None:  # animego: an entry per episode and dub
-        return f"ep:{episode}|{getattr(item, 'dub', '')}"
-    title = getattr(item, "title", "")
-    if found := _VOST_EPISODES.search(title) or _REZKA_EPISODE.search(title):
-        return f"ep:{found.group(1)}"
     return f"str:{item}"
+
+
+def is_new(release: Release | None, now: float, watched: Watched | None = None) -> bool:
+    """A new episode came out lately and it was not watched in anihub (`watched`, None: never watched)."""
+    if release is None or not release.updated_at or now - release.updated_at >= NEW_FOR:
+        return False
+    if watched is None:
+        return True
+    if release.episode is not None and watched.episode is not None:
+        return release.episode > watched.episode
+    # the episode numbers are unknown: new if it came out after the title was watched
+    return watched.at is None or watched.at < release.updated_at
 
 
 _HOUR = 3600
@@ -108,12 +149,12 @@ def premiere(item: Any) -> datetime | None:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone()
 
 
-def label(item: Any, updated_at: float = 0, now: float = 0) -> Text:
-    """`updated_at`: when a new release of the title was noticed (0: never)."""
+def label(item: Any, release: Release | None = None, now: float = 0, watched: Watched | None = None) -> Text:
+    """`release`: the last new episode of the title, `watched`: the title in the history of anihub."""
     text = Text()
     item_status = status(item)
-    is_new = updated_at > 0 and now - updated_at < NEW_FOR
-    if is_new:
+    new = is_new(release, now, watched)
+    if new:
         text.append(f" {t('NEW')} ", style="bold reverse")
         text.append(" ")
     if item_status == ANNOUNCED:
@@ -127,8 +168,8 @@ def label(item: Any, updated_at: float = 0, now: float = 0) -> Text:
             text.append(" · " + t("premiered {date}, no episodes on the site yet", date=day), style="dim")
         else:
             text.append(" · " + t("from {date}", date=day), style="dim")
-    if is_new:
-        text.append(" · " + t("new episode {ago}", ago=ago(now - updated_at)), style="dim")
+    if new and release is not None:
+        text.append(" · " + t("new episode {ago}", ago=ago(now - release.updated_at)), style="dim")
     return text
 
 

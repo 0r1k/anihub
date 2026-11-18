@@ -4,10 +4,10 @@ For every linked title the site of the link is asked how many episodes it has; m
 means new episodes. When the count of the site grows, the time is remembered (watching.json), so the latest
 releases go first and are marked NEW.
 
-NEW means an episode came out: a count seen for the first time (a title new in the list, a new link, the first
-check that did not fail) is only remembered. The counts with and without the leaked episodes are remembered
-apart, so turning the setting on is not a release either. A release the ongoing list of the site noticed
-(ongoing.json) counts too: a title with unwatched episodes is NEW there as well.
+NEW means an episode came out and it is not watched on MyAnimeList: a count seen for the first time (a title new
+in the list, a new link, the first check that did not fail) is only remembered. A leaked episode is never NEW,
+even when the setting shows them: the NEW count is the one without the leaked episodes (a title finished on
+MyAnimeList has nothing to leak). A release the ongoing list of the site noticed (ongoing.json) counts too.
 """
 
 from __future__ import annotations
@@ -72,6 +72,23 @@ class Entry:
         return self.counts[0 if self.with_leaked else 1]
 
     @property
+    def finished(self) -> bool:
+        """Finished on MyAnimeList: nothing to leak, see anihub.common.episodes."""
+        return self.anime.airing_status == "finished_airing"
+
+    @property
+    def released(self) -> int | None:
+        """The last episode on the site without the leaked ones (whatever the setting), None: not checked."""
+        if self.counts is None:
+            return None
+        return self.counts[0 if self.finished else 1]
+
+    @property
+    def new_released(self) -> int:
+        """Released episodes not watched on MyAnimeList: only they make the title NEW."""
+        return max(0, self.released - self.watched) if self.released is not None else 0
+
+    @property
     def watched(self) -> int:
         return self.anime.list_status.num_episodes_watched if self.anime.list_status else 0
 
@@ -97,8 +114,10 @@ def entries(session: Session, animes: list[MalAnime]) -> list[Entry]:
                 # the extractor of the link was removed or changed its models
                 link = None
         entry = Entry(anime, link, item, checking=item is not None)
-        if link and item is not None:
-            entry.updated_at = released.get((link["extractor_name"], item_key(item)), 0)
+        if link and item is not None and (release := released.get((link["extractor_name"], item_key(item)))):
+            # an episode out already watched on MyAnimeList is not a release to show
+            if release.episode is None or release.episode > entry.watched:
+                entry.updated_at = release.updated_at
         result.append(entry)
     return result
 
@@ -124,7 +143,7 @@ async def check(entry: Entry, semaphore: asyncio.Semaphore, *, force: bool = Fal
     """Fill `entry.counts` from the site of the link (cached for CACHE_TTL)."""
     key = (entry.extractor_name, item_key(entry.item))
     # a title finished on MyAnimeList has nothing to leak: see anihub.common.episodes
-    entry.with_leaked = show_leaked or entry.anime.airing_status == "finished_airing"
+    entry.with_leaked = show_leaked or entry.finished
     cached = _cache.get(key)
     # wall clock: the monotonic one stops during suspend, a night's sleep would keep the counts fresh.
     # A clock set back must not keep an entry forever, hence the lower bound
@@ -203,8 +222,9 @@ def remember_releases(items: list[Entry], now: float | None = None) -> None:
         grown = [_grown_at(record, name, count, now) for name, count in zip(_COUNTS, entry.counts, strict=True)]
         record["title"] = entry.anime.title
         record["checked_at"] = now
-        # the ongoing list may have noticed the release earlier (see `entries`)
-        entry.updated_at = max(grown[0 if entry.with_leaked else 1], entry.updated_at)
+        # the count without the leaked episodes, whatever the setting: a leak is not a release.
+        # The ongoing list may have noticed the release earlier (see `entries`)
+        entry.updated_at = max(grown[0 if entry.finished else 1], entry.updated_at)
     try:
         storage.write_json(path, _recent(state, now), indent=2)
     except OSError:
@@ -222,19 +242,25 @@ def ordered(items: list[Entry]) -> list[Entry]:
             return 1
         return 2
 
-    return sorted(items, key=lambda e: (group(e), -e.updated_at if e.unwatched else 0))
+    return sorted(items, key=lambda e: (group(e), -e.updated_at if e.new_released else 0))
+
+
+def is_new(entry: Entry, now: float) -> bool:
+    """A released episode not watched on MyAnimeList came out lately."""
+    return bool(entry.new_released and entry.updated_at and now - entry.updated_at < ongoing.NEW_FOR)
 
 
 def label(entry: Entry, now: float) -> Text:
     text = Text()
-    if entry.unwatched and entry.updated_at and now - entry.updated_at < ongoing.NEW_FOR:
+    new = is_new(entry, now)
+    if new:
         text.append(f" {t('NEW')} ", style="bold reverse")
         text.append(" ")
     text.append(entry.anime.title, style="bold")
     text.append(f" · {mal.progress_label(entry.anime)}", style="dim")
     if entry.unwatched:
         text.append(" · " + t("new: {count}", count=entry.unwatched), style="bold")
-        if entry.updated_at and now - entry.updated_at < ongoing.NEW_FOR:
+        if new:
             text.append(" " + ongoing.ago(now - entry.updated_at), style="dim")
     elif entry.checking:
         text.append(" · " + t("checking the site…"), style="dim italic")

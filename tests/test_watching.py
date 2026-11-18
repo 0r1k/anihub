@@ -203,3 +203,25 @@ def test_a_release_the_ongoing_list_noticed_is_new():
     # nothing unwatched: not new, whatever the ongoing list saw
     result.anime.list_status.num_episodes_watched = 7
     assert not is_new(result, 2000)
+
+
+def test_a_leaked_episode_is_never_new():
+    """Shown with the setting on, counted as unwatched, but not a release: NEW waits for the real next episode."""
+    site = Site(range(1, 7))
+    load(site, 1000, watched=6, show_leaked=True)
+    site.ordinals.append(12)
+    leaked = load(site, 2000, watched=6, show_leaked=True)
+    assert leaked.available == 12 and leaked.unwatched == 6
+    assert leaked.updated_at == 0 and not is_new(leaked, 2001)
+    site.ordinals.append(7)
+    released = load(site, 3000, watched=6, show_leaked=True)
+    assert released.updated_at == 3000 and is_new(released, 3001)
+    # the same without the setting
+    assert is_new(load(site, 3000, watched=6), 3001)
+
+
+def test_a_finished_title_has_nothing_to_leak():
+    site = Site(range(1, 7))
+    load(site, 1000, watched=6, airing_status="finished_airing")
+    site.ordinals.append(12)  # a gap in a finished title is a site that misses episodes, not a leak
+    assert is_new(load(site, 2000, watched=6, airing_status="finished_airing"), 2001)

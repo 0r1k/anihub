@@ -53,19 +53,16 @@ def _format_time(seconds: int) -> str:
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
 
 
-def _history_label(entry: dict[str, Any], released: float, now: float) -> Text:
-    """`released`: when the ongoing list noticed a new release of the title (0: never)."""
-    watched_at = entry.get("watched_at")
-    # entries saved before watched_at was remembered: any recent release is new
-    watched_after = isinstance(watched_at, (int, float)) and watched_at >= released
-    is_new = released > 0 and now - released < ongoing.NEW_FOR and not watched_after
+def _history_label(entry: dict[str, Any], release: ongoing_state.Release | None, now: float) -> Text:
+    """`release`: the last new episode of the title the ongoing list noticed."""
+    is_new = ongoing.is_new(release, now, history.watched(entry))
     label = Text()
     if is_new:
         label.append(f" {t('NEW')} ", style="bold reverse")
         label.append(" ")
     label.append(entry["data"]["title"], style="bold")
-    if is_new:
-        label.append(" · " + t("new episode {ago}", ago=ongoing.ago(now - released)), style="dim")
+    if is_new and release is not None:
+        label.append(" · " + t("new episode {ago}", ago=ongoing.ago(now - release.updated_at)), style="dim")
     details = [entry.get("extractor_name", "?")]
     if entry.get("episode") and entry["episode"] != "Unknown":
         details.append(entry["episode"])
@@ -202,7 +199,7 @@ class HomeScreen(Screen[None]):
         # all ongoing titles of the site (recently updated first), the filter is applied on display
         self._ongoing: list[Any] = []
         # when a new episode of the title was noticed, by item url
-        self._ongoing_updated: dict[str, float] = {}
+        self._ongoing_updated: dict[str, ongoing_state.Release] = {}
         # the sites the shown results come from: the source can be changed while they are shown
         self._ongoing_extractor = self._search_extractor = ""
         # the query of the shown search results
@@ -479,9 +476,11 @@ class HomeScreen(Screen[None]):
             stop_loading(results)
         self._ongoing_loaded = True
         self._ongoing_extractor = extractor_name
-        self._ongoing_updated = ongoing_state.track(extractor_name, items, ongoing.mark)
+        updated = ongoing_state.track(extractor_name, items, ongoing.mark, ongoing.last_episode)
+        self._ongoing_updated = updated
         # titles with new episodes on top, the rest in the site order (sorted() is stable)
-        self._ongoing = sorted(items, key=lambda i: -self._ongoing_updated.get(history.item_key(i), 0))
+        no_release = ongoing_state.Release(0, None)
+        self._ongoing = sorted(items, key=lambda i: -updated.get(history.item_key(i), no_release).updated_at)
         self._show_ongoing()
         self.focus_loaded("ongoing")
 
@@ -498,7 +497,13 @@ class HomeScreen(Screen[None]):
             results.empty_text = t("No titles with this status")
         now = time.time()
         updated = self._ongoing_updated
-        results.set_items(items, [ongoing.label(i, updated.get(history.item_key(i), 0), now) for i in items])
+        # an episode watched in anihub already is not new
+        watched = history.watched_titles()
+        labels = []
+        for item in items:
+            key = history.item_key(item)
+            labels.append(ongoing.label(item, updated.get(key), now, watched.get((self._ongoing_extractor, key))))
+        results.set_items(items, labels)
         if highlighted in items:
             results.highlighted = items.index(highlighted)
         counts = {status: sum(ongoing.status(i) == status for i in self._ongoing) for status in ongoing.FILTERS[1:]}
@@ -751,7 +756,7 @@ class HomeScreen(Screen[None]):
         released = ongoing_state.releases()
         now = time.time()
         labels = [
-            _history_label(entry, released.get((entry.get("extractor_name", ""), history.entry_key(entry)), 0), now)
+            _history_label(entry, released.get((entry.get("extractor_name", ""), history.entry_key(entry))), now)
             for entry, _item in entries
         ]
         results.set_items(entries, labels)

@@ -69,7 +69,7 @@ def test_ongoing_round_trip_and_broken_file():
         url = "https://example.org/naruto"
 
     marks = ongoing_state.track("animego", [Item()], lambda _i: "1")
-    assert list(marks.values()) == [0.0]
+    assert list(marks.values()) == [ongoing_state.Release(0.0, None)]
     path = ongoing_state._path()
     assert json.loads(path.read_text(encoding="utf-8"))["animego"]["titles"]
 
@@ -203,7 +203,7 @@ def test_ongoing_releases_of_every_site():
     ongoing_state.track("animego", [Item()], lambda _i: "1", now=100)
     assert ongoing_state.releases() == {}  # the first load only remembers
     ongoing_state.track("animego", [Item()], lambda _i: "2", now=200)
-    assert ongoing_state.releases() == {("animego", Item.url): 200.0}
+    assert ongoing_state.releases() == {("animego", Item.url): ongoing_state.Release(200.0, None)}
 
 
 def test_history_remembers_when_the_title_was_watched():

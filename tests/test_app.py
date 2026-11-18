@@ -16,6 +16,7 @@ from textual.widgets import Footer
 from anihub.common import mal_links, storage, updater
 from anihub.common.history import item_key
 from anihub.common.mal import MalAnime
+from anihub.common.ongoing_state import Release
 from anihub.tui import AnihubApp, Session, Settings, i18n, ongoing
 from anihub.tui import mal as tui_mal
 from anihub.tui.screens.home import HomeScreen, _history_label, _MalHint
@@ -437,11 +438,14 @@ def test_results_keep_their_source():
 
 
 def test_history_label_is_new_until_the_release_is_watched():
-    entry = {"data": {"title": "Naruto"}, "extractor_name": "animego", "episode": "3", "watched_at": 1000}
+    source = {"episode_title": "3", "ordinal": 3}
+    entry = {"data": {"title": "Naruto"}, "extractor_name": "animego", "episode": "3", "source": [source]}
     now = 5000
-    assert "NEW" in _history_label(entry, released=2000, now=now).plain
-    assert "NEW" not in _history_label(entry, released=500, now=now).plain  # watched after the release
-    assert "NEW" not in _history_label(entry, released=0, now=now).plain
-    assert "NEW" not in _history_label(entry, released=2000, now=2000 + ongoing.NEW_FOR + 1).plain
-    # saved before watched_at was remembered: a recent release is new
-    assert "NEW" in _history_label({**entry, "watched_at": None}, released=2000, now=now).plain
+    assert "NEW" in _history_label(entry, Release(2000, 4), now).plain
+    assert "NEW" not in _history_label(entry, Release(2000, 3), now).plain  # the new episode is watched
+    assert "NEW" not in _history_label(entry, None, now).plain
+    assert "NEW" not in _history_label(entry, Release(2000, 4), 2000 + ongoing.NEW_FOR + 1).plain
+    # no episode numbers: by the time it was watched
+    no_numbers = {**entry, "source": [], "watched_at": 1000}
+    assert "NEW" in _history_label(no_numbers, Release(2000, None), now).plain
+    assert "NEW" not in _history_label({**no_numbers, "watched_at": 3000}, Release(2000, None), now).plain
