@@ -644,8 +644,9 @@ class HomeScreen(Screen[None]):
         results.set_items(ordered, [watching.label(e, now) for e in ordered])
         if current in ordered:
             results.highlighted = ordered.index(current)
-        new = sum(1 for e in items if e.unwatched)
-        results.border_title = t("With new episodes: {new} of {total}", new=new, total=len(items)) if items else ""
+        unwatched = sum(1 for e in items if e.unwatched)
+        title = t("With unwatched episodes: {new} of {total}", new=unwatched, total=len(items))
+        results.border_title = title if items else ""
 
     # --- notifications -------------------------------------------------------
 

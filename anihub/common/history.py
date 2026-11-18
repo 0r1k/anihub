@@ -11,6 +11,7 @@ import attr
 from anihub.common import storage
 from anihub.common.config import get_history_path
 from anihub.common.extractors import dynamic_load_extractor_module
+from anihub.common.sanitizer import sanitize_filename
 
 if TYPE_CHECKING:
     from anicli_api.base import T_KW_HTTPS, BaseSource
@@ -181,12 +182,23 @@ def load(http: T_KW_HTTPS | None = None) -> list[tuple[dict[str, Any], Any]]:
     return results
 
 
+def _source(entry: dict[str, Any], episode_title: str) -> dict[str, Any] | None:
+    """The saved source of the episode.
+
+    Before 8.3 the player wrote the episode title into the history sanitized as a file name ("2: Наследие" as
+    "2- Наследие"), while the sources keep the title as it is: such entries are matched by the sanitized title.
+    """
+    sources = [s for s in entry.get("source") or [] if isinstance(s, dict)]
+    found = next((s for s in sources if s.get("episode_title") == episode_title), None)
+    if found is None:
+        found = next((s for s in sources if sanitize_filename(s.get("episode_title") or "") == episode_title), None)
+    return found
+
+
 def episode_ordinal(entry: dict[str, Any], episode_title: str) -> int | None:
     """Episode number of the history entry episode, if it was saved."""
-    for source in entry.get("source") or []:
-        if source.get("episode_title") == episode_title:
-            return source.get("ordinal")
-    return None
+    source = _source(entry, episode_title)
+    return source.get("ordinal") if source else None
 
 
 class Watched(NamedTuple):
@@ -217,6 +229,6 @@ def load_source(entry: dict[str, Any], episode_title: str, http: T_KW_HTTPS | No
     if not sources:
         msg = "history entry has no saved sources"
         raise LookupError(msg)
-    payload = next((s for s in sources if s["episode_title"] == episode_title), sources[-1])
+    payload = _source(entry, episode_title) or sources[-1]
     module, kwargs = _model_kwargs(entry["extractor_name"], payload, http)
     return module.Source(title=payload["title"], url=payload["url"], **kwargs)

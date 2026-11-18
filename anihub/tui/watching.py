@@ -259,7 +259,7 @@ def label(entry: Entry, now: float) -> Text:
     text.append(entry.anime.title, style="bold")
     text.append(f" · {mal.progress_label(entry.anime)}", style="dim")
     if entry.unwatched:
-        text.append(" · " + t("new: {count}", count=entry.unwatched), style="bold")
+        text.append(" · " + t("unwatched: {count}", count=entry.unwatched), style="bold")
         if new:
             text.append(" " + ongoing.ago(now - entry.updated_at), style="dim")
     elif entry.checking:

@@ -210,3 +210,16 @@ def test_history_remembers_when_the_title_was_watched():
     history._write([ENTRY])
     history.move_to_top(ENTRY)
     assert history.read()[0]["watched_at"] > 0
+
+
+def test_history_episode_saved_sanitized_by_old_versions():
+    """Before 8.3 the episode title came from the player sanitized: "2: Наследие" as "2- Наследие"."""
+    sources = [
+        {"episode_title": "Дюрарара!! 2: Наследие - 11 Episode", "ordinal": 11},
+        {"episode_title": "Дюрарара!! 2: Наследие - 12 Episode", "ordinal": 12},
+    ]
+    entry = {**ENTRY, "episode": "Дюрарара!! 2- Наследие - 12 Episode", "source": sources}
+    assert history.episode_ordinal(entry, entry["episode"]) == 12
+    assert history.watched(entry).episode == 12
+    assert history.episode_ordinal(entry, "Дюрарара!! 2: Наследие - 11 Episode") == 11
+    assert history.episode_ordinal(entry, "Другая серия") is None
