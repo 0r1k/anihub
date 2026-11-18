@@ -6,7 +6,8 @@ releases go first and are marked NEW.
 
 NEW means an episode came out: a count seen for the first time (a title new in the list, a new link, the first
 check that did not fail) is only remembered. The counts with and without the leaked episodes are remembered
-apart, so turning the setting on is not a release either.
+apart, so turning the setting on is not a release either. A release the ongoing list of the site noticed
+(ongoing.json) counts too: a title with unwatched episodes is NEW there as well.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 
-from anihub.common import mal_links, storage
+from anihub.common import mal_links, ongoing_state, storage
 from anihub.common.config import get_data_dir
 from anihub.common.episodes import split_leaked
 from anihub.common.history import item_key
@@ -85,6 +86,7 @@ class Entry:
 
 def entries(session: Session, animes: list[MalAnime]) -> list[Entry]:
     result = []
+    released = ongoing_state.releases()
     for anime in animes:
         link = mal_links.find_by_mal_id(anime.id, session.settings.extractor_name)
         item = None
@@ -94,7 +96,10 @@ def entries(session: Session, animes: list[MalAnime]) -> list[Entry]:
             except Exception:
                 # the extractor of the link was removed or changed its models
                 link = None
-        result.append(Entry(anime, link, item, checking=item is not None))
+        entry = Entry(anime, link, item, checking=item is not None)
+        if link and item is not None:
+            entry.updated_at = released.get((link["extractor_name"], item_key(item)), 0)
+        result.append(entry)
     return result
 
 
@@ -198,7 +203,8 @@ def remember_releases(items: list[Entry], now: float | None = None) -> None:
         grown = [_grown_at(record, name, count, now) for name, count in zip(_COUNTS, entry.counts, strict=True)]
         record["title"] = entry.anime.title
         record["checked_at"] = now
-        entry.updated_at = grown[0 if entry.with_leaked else 1]
+        # the ongoing list may have noticed the release earlier (see `entries`)
+        entry.updated_at = max(grown[0 if entry.with_leaked else 1], entry.updated_at)
     try:
         storage.write_json(path, _recent(state, now), indent=2)
     except OSError:

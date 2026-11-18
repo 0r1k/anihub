@@ -68,3 +68,20 @@ def track(
     data.pop("@watching", None)
     _write(data)
     return {url: float(e.get("updated_at") or 0) for url, e in titles.items()}
+
+
+def releases() -> dict[tuple[str, str], float]:
+    """When the titles of every site got a new release, by (extractor name, `item_key`). The state is not changed.
+
+    The Watching and History tabs mark their titles NEW with it: the ongoing list notices releases first.
+    """
+    result: dict[tuple[str, str], float] = {}
+    for name, site in _read().items():
+        titles = site.get("titles") if isinstance(site, dict) else None
+        if not isinstance(titles, dict):
+            continue
+        for key, entry in titles.items():
+            updated_at = entry.get("updated_at") if isinstance(entry, dict) else None
+            if isinstance(updated_at, (int, float)) and updated_at > 0:
+                result[name, key] = float(updated_at)
+    return result

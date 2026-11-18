@@ -53,8 +53,19 @@ def _format_time(seconds: int) -> str:
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
 
 
-def _history_label(entry: dict[str, Any], _item: Any) -> Text:
-    label = Text(entry["data"]["title"], style="bold")
+def _history_label(entry: dict[str, Any], released: float, now: float) -> Text:
+    """`released`: when the ongoing list noticed a new release of the title (0: never)."""
+    watched_at = entry.get("watched_at")
+    # entries saved before watched_at was remembered: any recent release is new
+    watched_after = isinstance(watched_at, (int, float)) and watched_at >= released
+    is_new = released > 0 and now - released < ongoing.NEW_FOR and not watched_after
+    label = Text()
+    if is_new:
+        label.append(f" {t('NEW')} ", style="bold reverse")
+        label.append(" ")
+    label.append(entry["data"]["title"], style="bold")
+    if is_new:
+        label.append(" · " + t("new episode {ago}", ago=ongoing.ago(now - released)), style="dim")
     details = [entry.get("extractor_name", "?")]
     if entry.get("episode") and entry["episode"] != "Unknown":
         details.append(entry["episode"])
@@ -737,7 +748,13 @@ class HomeScreen(Screen[None]):
         results: HistoryList = self.query_one(HistoryList)
         entries = history.load(self.app.session.http_kwargs)
         highlighted = results.highlighted
-        results.set_items(entries, [_history_label(*e) for e in entries])
+        released = ongoing_state.releases()
+        now = time.time()
+        labels = [
+            _history_label(entry, released.get((entry.get("extractor_name", ""), history.entry_key(entry)), 0), now)
+            for entry, _item in entries
+        ]
+        results.set_items(entries, labels)
         if entries and highlighted is not None:
             results.highlighted = min(highlighted, len(entries) - 1)
 

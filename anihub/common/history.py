@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 import attr
@@ -109,6 +110,8 @@ def save(
         **serialize_item(item, extractor_name),
         "episode": episode,
         "time": None,
+        # when the title was watched the last time: a release after it is NEW in the History tab
+        "watched_at": time.time(),
         "source": [serialize_source(title, s, ordinal) for title, s in (source or {}).items()],
     }
     entries = [e for e in read() if e.get("data", {}).get("title") != entry["data"]["title"]]
@@ -136,7 +139,7 @@ def append_source(episode_title: str, source: BaseSource, ordinal: int | None = 
 def move_to_top(entry: dict[str, Any]) -> None:
     """Make entry the last watched one (playback progress is written into the first entry)."""
     entries = [e for e in read() if e != entry]
-    _write([entry, *entries])
+    _write([{**entry, "watched_at": time.time()}, *entries])
 
 
 def delete(entry: dict[str, Any]) -> None:

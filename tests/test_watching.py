@@ -190,3 +190,16 @@ def test_ordered_new_first():
     entries = [load(caught_up, 0, watched=2, mal_id=3), load(old, 0, mal_id=1), load(fresh, 0, mal_id=2)]
     entries[1].updated_at, entries[2].updated_at = 10, 20
     assert [e.anime.id for e in watching.ordered(entries)] == [2, 1, 3]
+
+
+def test_a_release_the_ongoing_list_noticed_is_new():
+    """The ongoing list saw the episode come out: the first check of the title (nothing to compare) knows it."""
+    site = Site(range(1, 8))
+    result = entry(site, watched=6)
+    result.updated_at = 1500  # `entries` takes it from ongoing_state.releases()
+    asyncio.run(watching.check(result, asyncio.Semaphore(1), force=True))
+    watching.remember_releases([result], now=2000)
+    assert result.updated_at == 1500 and is_new(result, 2000)
+    # nothing unwatched: not new, whatever the ongoing list saw
+    result.anime.list_status.num_episodes_watched = 7
+    assert not is_new(result, 2000)

@@ -340,4 +340,4 @@ git push origin v7.3
 
 ## Ліцензія
 
-[GPL-3.0](LICENSE) (лише версія 3). anihub виріс із проєкту [ani-cli-ru](https://github.com/vypivshiy/ani-cli-ru).
+[GPL-3.0](LICENSE) (лише версія 3).

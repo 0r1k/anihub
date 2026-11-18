@@ -193,3 +193,20 @@ def test_settings_failed_write_keeps_file_and_raises(monkeypatch):
 def test_files_are_in_the_temporary_data_dir(user_dirs):
     assert history.get_history_path().is_relative_to(user_dirs)
     assert mal_links._path().parent == get_data_dir()
+
+
+def test_ongoing_releases_of_every_site():
+    class Item:
+        title = "Naruto"
+        url = "https://example.org/naruto"
+
+    ongoing_state.track("animego", [Item()], lambda _i: "1", now=100)
+    assert ongoing_state.releases() == {}  # the first load only remembers
+    ongoing_state.track("animego", [Item()], lambda _i: "2", now=200)
+    assert ongoing_state.releases() == {("animego", Item.url): 200.0}
+
+
+def test_history_remembers_when_the_title_was_watched():
+    history._write([ENTRY])
+    history.move_to_top(ENTRY)
+    assert history.read()[0]["watched_at"] > 0

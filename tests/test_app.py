@@ -16,9 +16,9 @@ from textual.widgets import Footer
 from anihub.common import mal_links, storage, updater
 from anihub.common.history import item_key
 from anihub.common.mal import MalAnime
-from anihub.tui import AnihubApp, Session, Settings, i18n
+from anihub.tui import AnihubApp, Session, Settings, i18n, ongoing
 from anihub.tui import mal as tui_mal
-from anihub.tui.screens.home import HomeScreen, _MalHint
+from anihub.tui.screens.home import HomeScreen, _history_label, _MalHint
 
 
 def run(coro, timeout: float = 60):
@@ -434,3 +434,14 @@ def test_results_keep_their_source():
             assert opened == [first]
 
     run(check())
+
+
+def test_history_label_is_new_until_the_release_is_watched():
+    entry = {"data": {"title": "Naruto"}, "extractor_name": "animego", "episode": "3", "watched_at": 1000}
+    now = 5000
+    assert "NEW" in _history_label(entry, released=2000, now=now).plain
+    assert "NEW" not in _history_label(entry, released=500, now=now).plain  # watched after the release
+    assert "NEW" not in _history_label(entry, released=0, now=now).plain
+    assert "NEW" not in _history_label(entry, released=2000, now=2000 + ongoing.NEW_FOR + 1).plain
+    # saved before watched_at was remembered: a recent release is new
+    assert "NEW" in _history_label({**entry, "watched_at": None}, released=2000, now=now).plain
